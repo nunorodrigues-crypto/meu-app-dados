@@ -6,3 +6,4 @@ openpyxl
 google-generativeai
 tabulate
 scikit-learn
+fpdf
