@@ -1,11 +1,3 @@
-O erro IndentationError aconteceu porque copiou o texto "# ... (o resto do código mantém-se igual)" literalmente para dentro do código, ou a indentação (os espaços) ficou desalinhada ao colar o pedaço novo.
-
-Para resolver isto de vez e garantir que tem o Visual Novo (AInsight) com a Animação e todas as funcionalidades a funcionar sem erros, aqui está o CÓDIGO COMPLETO (Versão 24.0).
-
-Não precisa de remendar nada. Apague tudo o que está no app.py e cole este bloco inteiro.
-
-Python
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
