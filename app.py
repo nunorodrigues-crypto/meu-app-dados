@@ -21,7 +21,7 @@ from streamlit_oauth import OAuth2Component
 # --- CONFIGURAÇÃO ---
 st.set_page_config(page_title="Data AI Hub", page_icon="💎", layout="wide")
 
-# --- GESTOR DE HISTÓRICO ---
+# --- GESTOR DE BASE DE DADOS ---
 HISTORY_FILE = "chat_database.json"
 class HistoryManager:
     def __init__(self, username="system"):
@@ -63,11 +63,11 @@ class HistoryManager:
     def get_messages(self, chat_id): return self.user_chats.get(chat_id, {}).get("messages", [])
     def toggle_pin(self, chat_id):
         if chat_id in self.user_chats: self.user_chats[chat_id]["pinned"] = not self.user_chats[chat_id].get("pinned", False); self.save_db(); st.rerun()
+    def rename_chat(self, chat_id, new_name):
+        self.user_chats[chat_id]["title"] = new_name; self.save_db(); st.rerun()
     def delete_chat(self, chat_id):
         if chat_id in self.user_chats: del self.user_chats[chat_id]; self.save_db(); return True
         return False
-    def rename_chat(self, chat_id, new_name):
-        self.user_chats[chat_id]["title"] = new_name; self.save_db(); st.rerun()
 
 # --- FUNÇÕES DE DADOS ---
 def clean_individual_df(df, filename):
@@ -132,12 +132,12 @@ def execute_code(code, df):
 def create_pdf(chat_history):
     pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=12); pdf.cell(200, 10, txt="Relatorio AI", ln=1, align='C'); pdf.ln(10)
     for msg in chat_history:
-        text = msg["content"].encode('latin-1', 'replace').decode('latin-1')
+        text = msg["content"].replace("€", "EUR").encode('latin-1', 'replace').decode('latin-1')
         pdf.set_font("Arial", 'B', 10); pdf.cell(0, 10, txt=f"[{msg['role']}]", ln=1)
         pdf.set_font("Arial", size=10); pdf.multi_cell(0, 10, txt=text); pdf.ln(5)
     return pdf.output(dest='S').encode('latin-1')
 
-# --- NOVAS FUNÇÕES DE LOGIN ---
+# --- FUNÇÕES DE SUPORTE LOGIN ---
 def generate_qr_code(data):
     qr = qrcode.QRCode(version=1, box_size=10, border=4); qr.add_data(data); qr.make(fit=True)
     img = qr.make_image(fill='black', back_color='white'); buf = BytesIO(); img.save(buf); return buf.getvalue()
@@ -145,71 +145,35 @@ def generate_qr_code(data):
 def generate_whatsapp_link(text):
     return f"https://wa.me/?text={urllib.parse.quote(text)}"
 
+# --- PÁGINA DE LOGIN (DESIGN VERTICAL & CORRIGIDO) ---
 def login_page():
-    st.markdown("<h2 style='text-align: center;'>🔐 Acesso Seguro</h2>", unsafe_allow_html=True)
+    # Centralização
+    col1, col2, col3 = st.columns([1, 2, 1])
     
-    # Verifica se há token na URL para auto-login
-    if "token" in st.query_params:
-        token_url = st.query_params["token"]
-        db = HistoryManager()
-        if db.validate_and_consume_token(token_url):
-            st.session_state['authenticated'] = True
-            st.session_state['username'] = "Convidado"
-            st.session_state['is_guest'] = True
-            st.success("🚀 Token Validado! A entrar..."); time.sleep(1); st.rerun()
-
-    col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        tab_google, tab_admin, tab_guest = st.tabs(["🔵 Google", "🔑 Admin", "🎫 Código"])
-        
-        # --- LOGIN GOOGLE (CORRIGIDO) ---
-        with tab_google:
-            if "GOOGLE_CLIENT_ID" in st.secrets:
-                try:
-                    oauth2 = OAuth2Component(
-                        st.secrets["GOOGLE_CLIENT_ID"], st.secrets["GOOGLE_CLIENT_SECRET"],
-                        "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token",
-                        "https://www.googleapis.com/oauth2/v1/tokeninfo", "https://www.googleapis.com/oauth2/v1/userinfo"
-                    )
-                    
-                    # AQUI ESTAVA O ERRO: Agora forçamos os nomes dos parâmetros
-                    result = oauth2.authorize_button(
-                        name="Entrar com Google",
-                        icon="https://www.google.com.tw/favicon.ico",
-                        redirect_uri=st.secrets["GOOGLE_REDIRECT_URI"],
-                        scope="email profile",
-                        key="google_btn"
-                    )
-                    
-                    if result and "token" in result:
-                        st.session_state['authenticated'] = True
-                        st.session_state['username'] = "Google User"
-                        st.session_state['is_guest'] = False
-                        st.success("Sucesso! A redirecionar..."); time.sleep(1); st.rerun()
-                except Exception as e:
-                    st.warning(f"Erro Google: {e}")
-            else:
-                st.warning("Configuração Google pendente.")
+        st.markdown("<h1 style='text-align: center;'>Data AI Hub</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: gray;'>Faça login para continuar</p>", unsafe_allow_html=True)
+        st.write("") 
 
-        # --- LOGIN ADMIN ---
-        with tab_admin:
-            u = st.text_input("User Admin"); p = st.text_input("Password", type="password")
-            if st.button("Entrar Admin", use_container_width=True):
-                if u == st.secrets.get("ADMIN_USER") and p == st.secrets.get("ADMIN_PASSWORD"):
-                    st.session_state['authenticated'] = True; st.session_state['username'] = u; st.session_state['is_guest'] = False; st.rerun()
-                else: st.error("Erro.")
+        # 1. USER / PASS (ADMIN)
+        with st.form("login_form"):
+            u = st.text_input("Utilizador")
+            p = st.text_input("Password", type="password")
+            # KEY ÚNICA PARA EVITAR ERRO
+            submitted = st.form_submit_button("Entrar no Sistema", use_container_width=True)
+            
+            if submitted:
+                ru = st.secrets.get("ADMIN_USER", "admin"); rp = st.secrets.get("ADMIN_PASSWORD", "123")
+                if u == ru and p == rp:
+                    st.session_state['authenticated'] = True
+                    st.session_state['username'] = u
+                    st.session_state['is_guest'] = False
+                    st.rerun()
+                else: st.error("Dados incorretos.")
 
-        # --- LOGIN CONVIDADO (CÓDIGO) ---
-        with tab_guest:
-            tk = st.text_input("Código de 6 dígitos")
-            if st.button("Validar Código", use_container_width=True):
-                db = HistoryManager()
-                if db.validate_and_consume_token(tk):
-                    st.session_state['authenticated'] = True; st.session_state['username'] = "Convidado"; st.session_state['is_guest'] = True
-                    st.success("Código Válido!"); time.sleep(1); st.rerun()
-                else: st.error("Inválido/Usado.")
+        st.markdown("<div style='text-align: center; margin: 15px; color: gray;'>ou</div>", unsafe_allow_html=True)
 
-        # 2. BOTÃO GOOGLE (FORA DO FORM)
+        # 2. GOOGLE OAUTH (CORRIGIDO COM KEY ÚNICA)
         if "GOOGLE_CLIENT_ID" in st.secrets:
             try:
                 oauth2 = OAuth2Component(
@@ -217,42 +181,47 @@ def login_page():
                     "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token",
                     "https://www.googleapis.com/oauth2/v1/tokeninfo", "https://www.googleapis.com/oauth2/v1/userinfo"
                 )
-                # O botão do Google cria o seu próprio UI
-                result = oauth2.authorize_button("Entrar com Google", "https://www.google.com.tw/favicon.ico", 
-                                                 st.secrets["GOOGLE_REDIRECT_URI"], "email profile")
+                # CORREÇÃO DO LINK E KEY
+                result = oauth2.authorize_button(
+                    name="Entrar com Google",
+                    icon="https://www.google.com.tw/favicon.ico",
+                    redirect_uri=st.secrets["GOOGLE_REDIRECT_URI"],
+                    scope="email profile",
+                    key="google_oauth_btn_vertical" # <--- KEY ÚNICA CRUCIAL
+                )
                 
                 if result and "token" in result:
                     st.session_state['authenticated'] = True
                     st.session_state['username'] = "Google User"
                     st.session_state['is_guest'] = False
-                    st.success("Sucesso! A redirecionar..."); time.sleep(1); st.rerun()
+                    st.success("Sucesso!"); time.sleep(1); st.rerun()
             except Exception as e:
-                st.warning("Configuração Google pendente.")
+                st.warning(f"Configuração Google pendente: {e}")
 
-        st.write("")
-        st.write("")
+        st.write("") 
         
-        # 3. ACESSO CONVIDADO (EXPANDER)
+        # 3. ACESSO CONVIDADO (EXPANDER DISCRETO)
         with st.expander("🎟️ Tenho um Código de Convite"):
-            tk = st.text_input("Insira o código de 6 dígitos")
-            if st.button("Validar Código", use_container_width=True):
+            tk = st.text_input("Código de 6 dígitos")
+            # KEY ÚNICA PARA EVITAR ERRO 'DuplicateElementId'
+            if st.button("Validar Código", key="btn_validate_guest_code", use_container_width=True):
                 db = HistoryManager()
                 if db.validate_and_consume_token(tk):
                     st.session_state['authenticated'] = True
                     st.session_state['username'] = "Convidado"
                     st.session_state['is_guest'] = True
                     st.success("Código Aceite!"); time.sleep(1); st.rerun()
-                else: st.error("Código inválido.")
+                else: st.error("Inválido.")
 
-        # Auto-Login URL
-        if "token" in st.query_params:
-            token = st.query_params["token"]
-            db = HistoryManager()
-            if db.validate_and_consume_token(token):
-                st.session_state['authenticated'] = True
-                st.session_state['username'] = "Convidado"
-                st.session_state['is_guest'] = True
-                st.rerun()
+    # Auto-Login por URL (Executa sempre)
+    if "token" in st.query_params:
+        tk_url = st.query_params["token"]
+        db = HistoryManager()
+        if db.validate_and_consume_token(tk_url):
+            st.session_state['authenticated'] = True
+            st.session_state['username'] = "Convidado"
+            st.session_state['is_guest'] = True
+            st.rerun()
 
 # --- APP PRINCIPAL ---
 def main_app():
@@ -264,8 +233,8 @@ def main_app():
         st.title(f"👤 {user}")
         
         if not is_guest:
-            with st.expander("🎟️ Gerar Convites", expanded=False):
-                if st.button("Criar Código Único"):
+            with st.expander("🎟️ Gerar Convites"):
+                if st.button("Criar Código Único", key="btn_create_invite"):
                     new_token = db.create_one_time_token()
                     base = st.secrets.get("APP_URL", "#")
                     link = f"{base}?token={new_token}"
@@ -276,26 +245,28 @@ def main_app():
                     st.markdown(f"[![WhatsApp](https://img.shields.io/badge/WhatsApp-Share-green)]({wa})")
         
         st.markdown("---")
-        if st.button("➕ Nova Análise", use_container_width=True): st.session_state['current_chat_id'] = None; st.rerun()
+        if st.button("➕ Nova Análise", key="btn_new_chat", use_container_width=True): 
+            st.session_state['current_chat_id'] = None; st.rerun()
+        
         for cid, d in sorted(db.user_chats.items(), key=lambda x:x[1]['created_at'], reverse=True):
-            col_del, col_ren, col_name = st.columns([1,1,5])
-            with col_del: 
-                if st.button("🗑️", key=f"d_{cid}"): db.delete_chat(cid); st.rerun()
-            with col_name:
-                if st.button(f"{'📌' if d.get('pinned') else '💬'} {d['title']}", key=cid):
+            c1, c2 = st.columns([1, 5])
+            with c1: 
+                 if st.button("🗑️", key=f"del_{cid}"): db.delete_chat(cid); st.rerun()
+            with c2:
+                 if st.button(f"💬 {d['title']}", key=f"chat_{cid}"):
                     st.session_state['current_chat_id']=cid; st.rerun()
         
         st.markdown("---")
-        if st.button("🚪 Sair"): 
+        if st.button("🚪 Sair", key="btn_logout"): 
             st.session_state['authenticated']=False; st.query_params.clear(); st.rerun()
 
     current_id = st.session_state.get('current_chat_id')
     messages = db.get_messages(current_id) if current_id else []
 
-    with st.expander("⚙️ Configuração & Dados", expanded=not messages):
+    with st.expander("⚙️ Dados", expanded=not messages):
         if "GEMINI_API_KEY" in st.secrets: api_key = st.secrets["GEMINI_API_KEY"]
         else: api_key = st.text_input("API Key", type="password")
-        c1, c2 = st.columns(2); persona = c1.selectbox("Persona", ["Data Scientist", "CFO", "CMO"]); context = c2.text_area("Contexto", height=40)
+        c1, c2 = st.columns(2); persona = c1.selectbox("Persona", ["Data Scientist", "CFO"]); context = c2.text_area("Contexto", height=40)
         t1, t2 = st.tabs(["Upload", "Link"]); up_files = t1.file_uploader("Ficheiros", accept_multiple_files=True)
         url_df = None; url_name = None
         if u := t2.text_input("URL"): url_df, url_name = load_from_url(u)
@@ -303,26 +274,4 @@ def main_app():
     df_final = None
     if up_files or url_df is not None:
         df_final, f_names = smart_merge(up_files, url_df, url_name)
-        if df_final is not None: st.success("Dados OK")
-
-    for msg in messages: st.chat_message(msg["role"]).write(msg["content"])
-
-    if query := st.chat_input("Pergunta..."):
-        if not api_key or df_final is None: st.error("Falta dados.")
-        else:
-            if not current_id: current_id = db.create_chat(query); st.session_state['current_chat_id']=current_id
-            st.chat_message("user").write(query); db.add_message(current_id, "user", query)
-            with st.spinner("..."):
-                code = ask_gemini(df_final, query, api_key, context, f_names, persona)
-                text, fig = execute_code(code, df_final)
-                st.chat_message("assistant").write(text); db.add_message(current_id, "assistant", text)
-                if fig: st.chat_message("assistant").pyplot(fig)
-
-    if messages:
-        pdf = create_pdf(messages)
-        st.download_button("📄 PDF", pdf, "relatorio.pdf")
-
-if __name__ == "__main__":
-    if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
-    if st.session_state["authenticated"]: main_app()
-    else: login_page()
+        if df_final is not None: st.
