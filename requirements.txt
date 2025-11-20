@@ -8,3 +8,4 @@ tabulate
 scikit-learn
 fpdf
 requests
+qrcode
