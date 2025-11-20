@@ -1,12 +1,3 @@
-O erro SyntaxError: invalid syntax está a acontecer porque, na tentativa de compactar o código, coloquei demasiadas instruções numa só linha (usando ;), e o Python não aceita abrir um bloco with (para o expander) na mesma linha que outras instruções.
-
-Peço desculpa! O Python exige que os blocos sejam indentados (em linhas separadas).
-
-Aqui está a Versão 23.0 (Corrigida e Expandida). Separei todas as linhas "espremidas" para garantir que não dá erro de sintaxe. Podes copiar e colar tudo no app.py.
-
-📋 Código app.py Completo e Corrigido:
-Python
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -431,7 +422,6 @@ def main_app():
             st.query_params.clear()
             st.rerun()
 
-    # LÓGICA CENTRAL (CORRIGIDA PARA NÃO DAR ERRO DE SINTAXE)
     current_id = st.session_state.get('current_chat_id')
     if 'temp_df' not in st.session_state: st.session_state['temp_df'] = None
     if 'temp_files' not in st.session_state: st.session_state['temp_files'] = []
@@ -450,7 +440,6 @@ def main_app():
         url_name = None
         if u := t2.text_input("URL"): url_df, url_name = load_from_url(u)
         
-        # AQUI ESTAVA O ERRO ANTERIORMENTE: AGORA ESTÁ EXPANDIDO
         if up_files or url_df is not None:
             df, fn = smart_merge(up_files, url_df, url_name)
             if df is not None:
@@ -517,7 +506,6 @@ def main_app():
                     st.chat_message("user").write(query)
                     chat_data["messages"].append({"role": "user", "content": query})
                     with st.spinner("..."):
-                        # Tenta recuperar contexto da sessão ou usa vazio
                         ctx = context if 'context' in locals() else ""
                         prs = persona if 'persona' in locals() else "Data Scientist"
                         
