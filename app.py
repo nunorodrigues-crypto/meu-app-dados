@@ -4,16 +4,63 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import google.generativeai as genai
 import sys
-from io import StringIO
+from io import StringIO, BytesIO
 import re
 from functools import reduce
 from fpdf import FPDF
 import time
+import json
+import os
+import uuid
+from datetime import datetime
+import requests # <--- NECESSÁRIO PARA LER LINKS
 
-# --- CONFIGURAÇÃO GLOBAL ---
-st.set_page_config(page_title="Data Intelligence Hub", page_icon="🔒", layout="wide")
+# --- CONFIGURAÇÃO ---
+st.set_page_config(page_title="Data AI Hub", page_icon="☁️", layout="wide")
 
-# --- FUNÇÕES DO SISTEMA (AS MESMAS DE ANTES) ---
+# --- GESTOR DE HISTÓRICO (Igual à versão anterior) ---
+HISTORY_FILE = "chat_database.json"
+
+class HistoryManager:
+    def __init__(self, username):
+        self.username = username
+        self.load_db()
+    def load_db(self):
+        if not os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, 'w') as f: json.dump({}, f)
+        with open(HISTORY_FILE, 'r') as f: self.full_db = json.load(f)
+        if self.username not in self.full_db: self.full_db[self.username] = {}
+        self.user_chats = self.full_db[self.username]
+    def save_db(self):
+        self.full_db[self.username] = self.user_chats
+        with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
+    def create_chat(self, first_message):
+        chat_id = str(uuid.uuid4())
+        timestamp = datetime.now().isoformat()
+        title = first_message[:30] + "..." if len(first_message) > 30 else first_message
+        self.user_chats[chat_id] = {"title": title, "created_at": timestamp, "pinned": False, "messages": []}
+        self.save_db()
+        return chat_id
+    def add_message(self, chat_id, role, content):
+        if chat_id not in self.user_chats: return
+        msg = {"role": role, "content": content, "timestamp": datetime.now().isoformat()}
+        self.user_chats[chat_id]["messages"].append(msg)
+        self.save_db()
+    def get_messages(self, chat_id): return self.user_chats.get(chat_id, {}).get("messages", [])
+    def toggle_pin(self, chat_id):
+        if chat_id in self.user_chats:
+            self.user_chats[chat_id]["pinned"] = not self.user_chats[chat_id].get("pinned", False)
+            self.save_db(); st.rerun()
+    def rename_chat(self, chat_id, new_name):
+        if chat_id in self.user_chats:
+            self.user_chats[chat_id]["title"] = new_name
+            self.save_db(); st.rerun()
+    def delete_chat(self, chat_id):
+        if chat_id in self.user_chats:
+            del self.user_chats[chat_id]; self.save_db(); return True
+        return False
+
+# --- FUNÇÕES DE DADOS ---
 def clean_individual_df(df, filename):
     df.drop_duplicates(inplace=True)
     date_col = None
@@ -29,24 +76,57 @@ def clean_individual_df(df, filename):
         return df, True
     return df, False
 
-def smart_merge(files):
+def load_from_url(url):
+    """Descarrega ficheiros de Links (Google Sheets ou CSV direto)."""
+    try:
+        # Truque para Google Sheets: transformar link de visualização em exportação CSV
+        if "docs.google.com/spreadsheets" in url:
+            url = url.replace("/edit?usp=sharing", "/export?format=csv")
+            url = url.replace("/edit", "/export?format=csv")
+        
+        response = requests.get(url)
+        response.raise_for_status()
+        
+        # Tenta ler como CSV
+        try:
+            return pd.read_csv(StringIO(response.text)), "Link_Google_CSV"
+        except:
+            # Se falhar, tenta Excel
+            return pd.read_excel(BytesIO(response.content)), "Link_Excel"
+    except Exception as e:
+        return None, str(e)
+
+def smart_merge(files=None, url_df=None, url_name=None):
     dataframes = []
     file_names = []
-    for file in files:
-        try:
-            if file.name.endswith('.csv'): df = pd.read_csv(file)
-            else: df = pd.read_excel(file)
-            clean_df, tem_data = clean_individual_df(df, file.name)
-            if tem_data:
-                prefix = file.name.split('.')[0]
-                cols = {c: f"{prefix}_{c}" for c in clean_df.columns if c != 'DATA_FUSAO'}
-                clean_df.rename(columns=cols, inplace=True)
-                dataframes.append(clean_df)
-                file_names.append(file.name)
-        except: pass
     
-    if not dataframes: return None, "Erro na leitura."
+    # 1. Processar ficheiros de Upload
+    if files:
+        for file in files:
+            try:
+                if file.name.endswith('.csv'): df = pd.read_csv(file)
+                else: df = pd.read_excel(file)
+                clean_df, tem_data = clean_individual_df(df, file.name)
+                if tem_data:
+                    prefix = file.name.split('.')[0]
+                    cols = {c: f"{prefix}_{c}" for c in clean_df.columns if c != 'DATA_FUSAO'}
+                    clean_df.rename(columns=cols, inplace=True)
+                    dataframes.append(clean_df)
+                    file_names.append(file.name)
+            except: pass
+    
+    # 2. Processar ficheiro de URL (se houver)
+    if url_df is not None:
+        clean_df, tem_data = clean_individual_df(url_df, url_name)
+        if tem_data:
+            cols = {c: f"CLOUD_{c}" for c in clean_df.columns if c != 'DATA_FUSAO'}
+            clean_df.rename(columns=cols, inplace=True)
+            dataframes.append(clean_df)
+            file_names.append(url_name)
+
+    if not dataframes: return None, "Erro ou sem dados."
     if len(dataframes) == 1: return dataframes[0], file_names
+    
     try:
         df_final = reduce(lambda left, right: pd.merge(left, right, on='DATA_FUSAO', how='outer'), dataframes)
         return df_final.sort_values('DATA_FUSAO').fillna(0), file_names
@@ -55,17 +135,17 @@ def smart_merge(files):
 def ask_gemini(df, query, api_key, context, file_list, persona):
     genai.configure(api_key=api_key)
     persona_prompt = "Atue como Data Scientist."
-    if persona == "CFO": persona_prompt = "Atue como Diretor Financeiro focado em ROI."
-    elif persona == "CMO": persona_prompt = "Atue como Diretor de Marketing focado em crescimento."
+    if persona == "CFO": persona_prompt = "Atue como CFO focado em ROI."
+    elif persona == "CMO": persona_prompt = "Atue como CMO focado em crescimento."
 
     model = genai.GenerativeModel("gemini-1.5-flash")
     prompt = f"""
     {persona_prompt}
     CONTEXTO: {context}
-    DADOS: {", ".join(file_list)}
+    DADOS ORIGEM: {", ".join(file_list)}
     ESTRUTURA: {df.dtypes.to_string()}
     PERGUNTA: "{query}"
-    REGRAS: Responda APENAS com código Python (```python). Use 'df', print() e plt.figure().
+    REGRAS: Responda APENAS com código Python (```python). Use 'df', print(), plt.figure().
     """
     response = model.generate_content(prompt)
     match = re.search(r"```python(.*?)```", response.text, re.DOTALL)
@@ -95,117 +175,116 @@ def create_pdf(chat_history):
         pdf.set_font("Arial", size=10); pdf.multi_cell(0, 10, txt=text); pdf.ln(5)
     return pdf.output(dest='S').encode('latin-1')
 
-# --- ECRÃ 1: PÁGINA DE LOGIN (WELCOME PAGE) ---
+# --- PÁGINAS ---
 def login_page():
-    st.markdown("""
-        <style>
-        .login-container {
-            padding: 50px;
-            border-radius: 10px;
-            box-shadow: 0px 4px 12px rgba(0,0,0,0.1);
-            text-align: center;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
-    col1, col2, col3 = st.columns([1, 2, 1])
-
+    st.markdown("<h2 style='text-align: center;'>🔐 Acesso Cloud</h2>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        st.markdown("## 🔐 Acesso Restrito")
-        st.markdown("### AI Data Intelligence Hub")
-        st.markdown("---")
-        
-        username = st.text_input("Utilizador")
-        password = st.text_input("Password", type="password")
-        
-        if st.button("Entrar no Sistema", use_container_width=True):
-            # Verificar credenciais (simples ou via Secrets)
-            real_user = st.secrets.get("ADMIN_USER", "admin")
-            real_pass = st.secrets.get("ADMIN_PASSWORD", "123")
-            
-            if username == real_user and password == real_pass:
-                st.success("Login com sucesso! A carregar...")
-                time.sleep(1) # Efeito visual
+        u = st.text_input("User"); p = st.text_input("Pass", type="password")
+        if st.button("Entrar", use_container_width=True):
+            ru = st.secrets.get("ADMIN_USER", "admin")
+            rp = st.secrets.get("ADMIN_PASSWORD", "123")
+            if u == ru and p == rp:
                 st.session_state['authenticated'] = True
-                st.rerun() # Recarrega a página para entrar no sistema
-            else:
-                st.error("Credenciais incorretas.")
-        
-        st.markdown("---")
-        st.caption("© 2024 Enterprise Data Solutions")
+                st.session_state['username'] = u
+                st.rerun()
+            else: st.error("Erro.")
 
-# --- ECRÃ 2: APLICAÇÃO PRINCIPAL (SÓ APARECE DEPOIS DO LOGIN) ---
 def main_app():
-    # Botão de Logout na Sidebar
+    user = st.session_state['username']
+    db = HistoryManager(user)
+
     with st.sidebar:
-        st.title("🏢 Enterprise AI")
-        if st.button("🚪 Sair / Logout"):
-            st.session_state['authenticated'] = False
-            st.rerun()
+        st.title("🗂️ Histórico")
+        if st.button("➕ Nova Análise", use_container_width=True):
+            st.session_state['current_chat_id'] = None; st.rerun()
+        st.markdown("---")
         
+        all_chats = db.user_chats
+        pinned = {k:v for k,v in all_chats.items() if v.get('pinned')}
+        recent = {k:v for k,v in all_chats.items() if not v.get('pinned')}
+        
+        def draw_list(cdict, lbl):
+            if cdict:
+                st.caption(lbl)
+                for cid, d in sorted(cdict.items(), key=lambda x:x[1]['created_at'], reverse=True):
+                    bt = "primary" if st.session_state.get('current_chat_id')==cid else "secondary"
+                    if st.button(f"{'📌' if lbl=='Fixados' else '💬'} {d['title']}", key=cid, type=bt, use_container_width=True):
+                        st.session_state['current_chat_id']=cid; st.rerun()
+        draw_list(pinned, "Fixados")
+        draw_list(recent, "Recentes")
         st.markdown("---")
-        # API Key Automática
-        if "GEMINI_API_KEY" in st.secrets:
-            api_key = st.secrets["GEMINI_API_KEY"]
-            st.success("🔑 Sistema Ativo")
-        else:
-            api_key = st.text_input("API Key", type="password")
+        if st.button("🚪 Logout"): st.session_state['authenticated']=False; st.rerun()
 
-        st.markdown("---")
-        persona = st.selectbox("Persona", ["Data Scientist", "CFO", "CMO"])
-        context = st.text_area("Contexto", height=80)
-
-    # Área Principal
-    st.title(f"Olá, {st.secrets.get('ADMIN_USER', 'Admin')} 👋")
-    st.markdown("Carregue os dados para iniciar a análise estratégica.")
-
-    if "messages" not in st.session_state: st.session_state.messages = []
-    
-    # Botão Limpar
-    if st.button("🗑️ Limpar Análise Atual"):
-        st.session_state.messages = []
-        st.rerun()
-
-    uploaded_files = st.file_uploader("", accept_multiple_files=True)
-
-    if uploaded_files and api_key:
-        df_final, file_names = smart_merge(uploaded_files)
-        if df_final is not None:
-            with st.expander("📂 Dados Carregados", expanded=True):
-                st.dataframe(df_final.head())
-
-            # Histórico
-            for msg in st.session_state.messages:
-                st.chat_message(msg["role"]).write(msg["content"])
-                if "image" in msg: st.chat_message(msg["role"]).pyplot(msg["image"])
-
-            query = st.chat_input("Faça a sua pergunta...")
-            if query:
-                st.session_state.messages.append({"role": "user", "content": query})
-                st.chat_message("user").write(query)
-                with st.spinner("A analisar..."):
-                    code = ask_gemini(df_final, query, api_key, context, file_names, persona)
-                    text, fig = execute_code(code, df_final)
-                    
-                    entry = {"role": "assistant", "content": text}
-                    st.chat_message("assistant").write(text)
-                    if fig and fig.get_fignums():
-                        st.chat_message("assistant").pyplot(fig)
-                        entry["image"] = fig
-                    st.session_state.messages.append(entry)
-            
-            if st.session_state.messages:
-                pdf_bytes = create_pdf(st.session_state.messages)
-                st.download_button("📄 Download PDF", pdf_bytes, "relatorio.pdf", "application/pdf")
-
-# --- CONTROLADOR DE FLUXO ---
-if __name__ == "__main__":
-    # Se não tiver estado definido, define como falso
-    if "authenticated" not in st.session_state:
-        st.session_state["authenticated"] = False
-
-    # Se estiver autenticado, mostra a App. Se não, mostra Login.
-    if st.session_state["authenticated"]:
-        main_app()
+    # ÁREA PRINCIPAL
+    current_id = st.session_state.get('current_chat_id')
+    if current_id:
+        chat_data = all_chats[current_id]
+        c1, c2, c3 = st.columns([1, 1, 4])
+        with c1: 
+            if st.button(f"📌 {'Unpin' if chat_data.get('pinned') else 'Pin'}"): db.toggle_pin(current_id)
+        with c2: 
+            if st.button("🗑️"): 
+                if db.delete_chat(current_id): st.session_state['current_chat_id']=None; st.rerun()
+        messages = db.get_messages(current_id)
     else:
-        login_page()
+        messages = []
+
+    with st.expander("⚙️ Configuração & Fontes de Dados", expanded=not messages):
+        if "GEMINI_API_KEY" in st.secrets: api_key = st.secrets["GEMINI_API_KEY"]
+        else: api_key = st.text_input("API Key", type="password")
+        
+        c_a, c_b = st.columns(2)
+        persona = c_a.selectbox("Persona", ["Data Scientist", "CFO", "CMO"])
+        context = c_b.text_area("Contexto", height=40)
+        
+        # --- NOVIDADE: ABAS DE UPLOAD ---
+        tab_up, tab_link = st.tabs(["📂 Upload Arquivo", "🔗 Link Cloud (Google Drive/Sheets)"])
+        
+        uploaded_files = None
+        url_df = None
+        url_name = None
+
+        with tab_up:
+            uploaded_files = st.file_uploader("Arraste ficheiros do PC", accept_multiple_files=True)
+        
+        with tab_link:
+            st.info("Cole um link público do Google Sheets ou um link direto de CSV.")
+            url_input = st.text_input("Cole o URL aqui:")
+            if url_input:
+                with st.spinner("A baixar da nuvem..."):
+                    url_df, url_name = load_from_url(url_input)
+                    if url_df is not None:
+                        st.success("✅ Ficheiro lido da nuvem com sucesso!")
+                    else:
+                        st.error(f"Erro ao ler link: {url_name}")
+
+    # FUSÃO HÍBRIDA (Upload + Link)
+    df_final = None
+    if uploaded_files or url_df is not None:
+        df_final, file_names = smart_merge(uploaded_files, url_df, url_name)
+        if df_final is not None: 
+            st.success(f"Dados ativos: {', '.join(file_names)}")
+
+    for msg in messages:
+        st.chat_message(msg["role"]).write(msg["content"])
+
+    if query := st.chat_input("Pergunta..."):
+        if not api_key or df_final is None: st.error("Faltam dados ou chave.")
+        else:
+            if not current_id: current_id = db.create_chat(query); st.session_state['current_chat_id']=current_id
+            st.chat_message("user").write(query); db.add_message(current_id, "user", query)
+            
+            with st.spinner("A analisar..."):
+                code = ask_gemini(df_final, query, api_key, context, file_names, persona)
+                text, fig = execute_code(code, df_final)
+                st.chat_message("assistant").write(text); db.add_message(current_id, "assistant", text)
+                if fig and fig.get_fignums(): st.chat_message("assistant").pyplot(fig)
+
+            if st.session_state.messages: # Correção visual do botão
+                 pass 
+
+if __name__ == "__main__":
+    if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
+    if st.session_state["authenticated"]: main_app()
+    else: login_page()
