@@ -96,15 +96,23 @@ def execute_generated_code(code, df):
 # --- 4. INTERFACE PRINCIPAL ---
 def main():
     # --- BARRA LATERAL ---
+    # --- BARRA LATERAL (Inteligente) ---
     with st.sidebar:
         st.title("💼 Assistente **Pro**")
         st.markdown("---")
-        api_key = st.text_input("Gemini API Key", type="password")
-        st.markdown("[Obter API Key](https://aistudio.google.com/app/apikey)")
+        
+        # Tenta buscar a chave nos Segredos do Streamlit
+        if "GEMINI_API_KEY" in st.secrets:
+            api_key = st.secrets["GEMINI_API_KEY"]
+            st.success("✅ API Key carregada do sistema!")
+        else:
+            # Se não estiver nos segredos (ex: rodando localmente), pede ao usuário
+            api_key = st.text_input("Gemini API Key", type="password")
+            st.markdown("[Obter API Key](https://aistudio.google.com/app/apikey)")
         
         st.markdown("---")
         st.info("💡 Dica: Pergunte sobre vendas, tendências ou peça gráficos.")
-        st.caption("v2.0 - Turbo Mode")
+        st.caption("v2.1 - Auto-Login")
 
     # --- TÍTULO PRINCIPAL ---
     st.markdown("""
