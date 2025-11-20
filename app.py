@@ -104,7 +104,7 @@ def main():
         # Tenta buscar a chave nos Segredos do Streamlit
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
-            st.success("✅ API Key carregada do sistema!")
+            st.success("✅ API Key cready for Take-off")
         else:
             # Se não estiver nos segredos (ex: rodando localmente), pede ao usuário
             api_key = st.text_input("Gemini API Key", type="password")
@@ -112,7 +112,7 @@ def main():
         
         st.markdown("---")
         st.info("💡 Dica: Pergunte sobre vendas, tendências ou peça gráficos.")
-        st.caption("v2.1 - Auto-Login")
+        st.caption("v2.1 - Insightkube")
 
     # --- TÍTULO PRINCIPAL ---
     st.markdown("""
@@ -121,11 +121,11 @@ def main():
         .subtitle-font { font-size:20px; color: #6C757D; }
         </style>
         <p class="title-font">📈 Análise de Dados Inteligente</p>
-        <p class="subtitle-font">O seu cientista de dados pessoal, powered by Gemini.</p>
+        <p class="subtitle-font">O seu cientista de dados pessoal, powered by Insightkube.</p>
     """, unsafe_allow_html=True)
 
     # --- UPLOAD ---
-    uploaded_file = st.file_uploader("Carregue seu Excel ou CSV", type=['csv', 'xlsx'])
+    uploaded_file = st.file_uploader("Carregue seu Excel/ CSV e veja a magia a acontecer!", type=['csv', 'xlsx'])
 
     if uploaded_file and api_key:
         # Carregar dados
@@ -137,7 +137,7 @@ def main():
         
         # --- RELATÓRIO PRELIMINAR ---
         with st.expander("📊 Relatório Preliminar dos Dados", expanded=True):
-            # AQUI ESTAVA O ERRO:
+          
             tab1, tab2, tab3 = st.tabs(["📋 Tabela", "📈 Estatísticas", "🔥 Correlações"])
             
             with tab1:
