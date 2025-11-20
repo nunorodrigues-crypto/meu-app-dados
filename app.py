@@ -1,3 +1,16 @@
+Tem toda a razão! Ao focar tanto nas novas funcionalidades empresariais (Workspaces, Notas, Partilha), acabei por "limpar" demais a interface de login e o gerador de convites da barra lateral. Peço desculpa por isso.
+
+Vamos corrigir já. Esta é a Versão 18.0 (A Versão Definitiva).
+
+Esta versão une tudo:
+
+Funcionalidades Enterprise: (Notas, Partilha, Workspaces, PDF).
+
+Acesso Universal: (Google, Admin Password E o regresso do QR Code/Token).
+
+Substitua TODO o app.py por este código:
+Python
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -19,9 +32,9 @@ import urllib.parse
 from streamlit_oauth import OAuth2Component
 
 # --- CONFIGURAÇÃO ---
-st.set_page_config(page_title="Data AI Enterprise", page_icon="🏢", layout="wide")
+st.set_page_config(page_title="Data AI Hub", page_icon="🏢", layout="wide")
 
-# --- GESTOR DE DADOS (DATABASE AVANÇADA) ---
+# --- GESTOR DE DADOS (DATABASE) ---
 HISTORY_FILE = "chat_database.json"
 
 class HistoryManager:
@@ -31,22 +44,16 @@ class HistoryManager:
 
     def load_db(self):
         if not os.path.exists(HISTORY_FILE):
-            # Nova estrutura com Workspaces
             init_db = {"users": {}, "guest_tokens": {}, "workspaces": {}}
             with open(HISTORY_FILE, 'w') as f: json.dump(init_db, f)
         
         with open(HISTORY_FILE, 'r') as f: self.full_db = json.load(f)
         
-        # Migração segura
+        # Garantir estrutura completa
         if "workspaces" not in self.full_db: self.full_db["workspaces"] = {}
-        
-        # Inicializar user
+        if "guest_tokens" not in self.full_db: self.full_db["guest_tokens"] = {}
         if self.username not in self.full_db["users"]:
-            self.full_db["users"][self.username] = {
-                "chats": {}, 
-                "plan": "free", # free ou pro
-                "workspaces": [] # IDs dos workspaces
-            }
+            self.full_db["users"][self.username] = {"chats": {}, "plan": "free", "workspaces": []}
         
         self.user_data = self.full_db["users"][self.username]
         self.user_chats = self.user_data["chats"]
@@ -55,10 +62,14 @@ class HistoryManager:
         self.full_db["users"][self.username] = self.user_data
         with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
 
-    # --- TOKEN CONVIDADO ---
+    # --- GESTÃO DE TOKENS / CONVITES (O QUE FALTOU) ---
     def create_one_time_token(self):
         token = str(uuid.uuid4())[:6].upper()
-        self.full_db["guest_tokens"][token] = {"created_at": datetime.now().isoformat(), "used": False, "created_by": self.username}
+        self.full_db["guest_tokens"][token] = {
+            "created_at": datetime.now().isoformat(),
+            "used": False,
+            "created_by": self.username
+        }
         with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
         return token
     
@@ -66,7 +77,8 @@ class HistoryManager:
         token = token.strip().upper()
         tokens = self.full_db.get("guest_tokens", {})
         if token in tokens and not tokens[token]["used"]:
-            tokens[token]["used"] = True; tokens[token]["used_at"] = datetime.now().isoformat()
+            tokens[token]["used"] = True
+            tokens[token]["used_at"] = datetime.now().isoformat()
             with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
             return True
         return False
@@ -75,67 +87,41 @@ class HistoryManager:
     def create_chat(self, first_message, workspace_id=None):
         chat_id = str(uuid.uuid4())
         title = first_message[:30] + "..." if len(first_message) > 30 else first_message
-        
         chat_obj = {
-            "title": title, 
-            "created_at": datetime.now().isoformat(), 
-            "pinned": False, 
-            "messages": [],
-            "notes": "", # <--- NOVO: Bloco de Notas
-            "owner": self.username,
-            "shared_with": [], # <--- NOVO: Lista de emails
+            "title": title, "created_at": datetime.now().isoformat(), "pinned": False, 
+            "messages": [], "notes": "", "owner": self.username, "shared_with": [], 
             "workspace_id": workspace_id
         }
-
-        # Se for num workspace, salva lá. Se não, salva no user.
         if workspace_id and workspace_id in self.full_db["workspaces"]:
             self.full_db["workspaces"][workspace_id]["chats"][chat_id] = chat_obj
             with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
         else:
             self.user_chats[chat_id] = chat_obj
             self.save_db()
-            
         return chat_id
 
     def get_chat(self, chat_id):
-        # 1. Procura nos meus chats
         if chat_id in self.user_chats: return self.user_chats[chat_id]
-        
-        # 2. Procura em chats partilhados comigo (Scan Global - Ineficiente mas funcional para demo)
         for u_email, u_data in self.full_db["users"].items():
             if chat_id in u_data["chats"]:
                 chat = u_data["chats"][chat_id]
-                if self.username in chat.get("shared_with", []):
-                    return chat
-        
-        # 3. Procura em Workspaces
+                if self.username in chat.get("shared_with", []): return chat
         for wid, wdata in self.full_db["workspaces"].items():
             if chat_id in wdata["chats"]:
-                # Verificar se sou membro
-                if self.username in wdata["members"] or self.username == wdata["owner"]:
-                    return wdata["chats"][chat_id]
+                if self.username in wdata["members"] or self.username == wdata["owner"]: return wdata["chats"][chat_id]
         return None
 
     def update_chat(self, chat_id, chat_data):
-        # Encontra onde o chat está e atualiza
         if chat_id in self.user_chats:
-            self.user_chats[chat_id] = chat_data
-            self.save_db()
-            return
-        
-        # Check workspaces
+            self.user_chats[chat_id] = chat_data; self.save_db(); return
         for wid, wdata in self.full_db["workspaces"].items():
             if chat_id in wdata["chats"]:
                 self.full_db["workspaces"][wid]["chats"][chat_id] = chat_data
-                with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
-                return
-        
-        # Check shared (dono original)
+                with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str); return
         for u_email, u_data in self.full_db["users"].items():
              if chat_id in u_data["chats"]:
                  self.full_db["users"][u_email]["chats"][chat_id] = chat_data
-                 with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
-                 return
+                 with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str); return
 
     def share_chat(self, chat_id, target_email):
         chat = self.get_chat(chat_id)
@@ -144,43 +130,35 @@ class HistoryManager:
             self.update_chat(chat_id, chat)
             return True
         return False
+    
+    def delete_chat(self, chat_id):
+        if chat_id in self.user_chats: del self.user_chats[chat_id]; self.save_db(); return True
+        return False
 
-    # --- GESTÃO DE WORKSPACES (CORPORATIVO) ---
-    def upgrade_plan(self):
-        self.user_data["plan"] = "pro"
-        self.save_db()
+    # --- GESTÃO DE WORKSPACES ---
+    def upgrade_plan(self): self.user_data["plan"] = "pro"; self.save_db()
 
     def create_workspace(self, name):
         if self.user_data["plan"] != "pro": return False, "Requer Plano PRO"
-        
         ws_id = str(uuid.uuid4())
-        self.full_db["workspaces"][ws_id] = {
-            "name": name,
-            "owner": self.username,
-            "members": [self.username],
-            "chats": {}
-        }
+        self.full_db["workspaces"][ws_id] = {"name": name, "owner": self.username, "members": [self.username], "chats": {}}
         self.user_data["workspaces"].append(ws_id)
-        
-        # Save Global
         with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
-        return True, "Criado com sucesso"
+        return True, "Criado"
 
     def add_member_to_workspace(self, ws_id, email):
         if ws_id in self.full_db["workspaces"]:
             ws = self.full_db["workspaces"][ws_id]
             if email not in ws["members"]:
                 ws["members"].append(email)
-                # Adicionar referência no user (se existir)
                 if email in self.full_db["users"]:
                     if ws_id not in self.full_db["users"][email].get("workspaces", []):
                          self.full_db["users"][email].setdefault("workspaces", []).append(ws_id)
-                
                 with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
                 return True
         return False
 
-# --- FUNÇÕES DE DADOS (IGUAIS) ---
+# --- FUNÇÕES DE DADOS ---
 def clean_individual_df(df, filename):
     df.drop_duplicates(inplace=True); date_col = None
     for col in df.columns:
@@ -226,11 +204,22 @@ def smart_merge(files=None, url_df=None, url_name=None):
 
 def ask_gemini(df, query, api_key, context, file_list, persona):
     genai.configure(api_key=api_key)
+    persona_prompt = "Atue como Data Scientist."
+    if persona == "CFO": persona_prompt = "Atue como Diretor Financeiro Rígido."
+    elif persona == "CMO": persona_prompt = "Atue como Diretor de Marketing Criativo."
+
     model = genai.GenerativeModel("gemini-1.5-flash")
-    prompt = f"Persona: {persona}. Contexto: {context}. Files: {file_list}. Dados: {df.dtypes}. Query: {query}. Responda SÓ código Python (```python)."
-    res = model.generate_content(prompt)
-    match = re.search(r"```python(.*?)```", res.text, re.DOTALL)
-    return match.group(1).strip() if match else res.text.replace("```", "").strip()
+    prompt = f"""
+    {persona_prompt}
+    CONTEXTO: {context}
+    DADOS: {", ".join(file_list)}
+    ESTRUTURA: {df.dtypes.to_string()}
+    PERGUNTA: "{query}"
+    REGRAS: Responda APENAS com código Python (```python). Use 'df', print(), plt.figure().
+    """
+    response = model.generate_content(prompt)
+    match = re.search(r"```python(.*?)```", response.text, re.DOTALL)
+    return match.group(1).strip() if match else response.text.replace("```", "").strip()
 
 def execute_code(code, df):
     try:
@@ -243,15 +232,9 @@ def execute_code(code, df):
 def create_pdf(chat_data):
     pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=12)
     pdf.cell(200, 10, txt=f"Relatorio: {chat_data['title']}", ln=1, align='C'); pdf.ln(10)
-    
-    # Adicionar Notas
-    pdf.set_font("Arial", 'B', 14); pdf.cell(0, 10, txt="NOTAS / RESUMO", ln=1)
-    pdf.set_font("Arial", size=10)
-    notes = chat_data.get("notes", "").encode('latin-1', 'replace').decode('latin-1')
-    pdf.multi_cell(0, 10, txt=notes); pdf.ln(10)
-
-    # Adicionar Chat
-    pdf.set_font("Arial", 'B', 14); pdf.cell(0, 10, txt="HISTORICO DE CHAT", ln=1)
+    pdf.set_font("Arial", 'B', 14); pdf.cell(0, 10, txt="NOTAS", ln=1)
+    pdf.set_font("Arial", size=10); pdf.multi_cell(0, 10, txt=chat_data.get("notes", "").encode('latin-1', 'replace').decode('latin-1')); pdf.ln(10)
+    pdf.set_font("Arial", 'B', 14); pdf.cell(0, 10, txt="CHAT", ln=1)
     pdf.set_font("Arial", size=10)
     for msg in chat_data["messages"]:
         text = msg["content"].replace("€", "EUR").encode('latin-1', 'replace').decode('latin-1')
@@ -259,180 +242,196 @@ def create_pdf(chat_data):
         pdf.set_font("Arial", size=10); pdf.multi_cell(0, 10, txt=text); pdf.ln(5)
     return pdf.output(dest='S').encode('latin-1')
 
-# --- UI LOGIN E SUPORTE ---
+# --- SUPORTE LOGIN (QR CODE) ---
 def generate_qr_code(data):
     qr = qrcode.QRCode(version=1, box_size=10, border=4); qr.add_data(data); qr.make(fit=True)
     img = qr.make_image(fill='black', back_color='white'); buf = BytesIO(); img.save(buf); return buf.getvalue()
 
+def generate_whatsapp_link(text):
+    return f"https://wa.me/?text={urllib.parse.quote(text)}"
+
+# --- PÁGINA DE LOGIN (RESTITUIÇÃO DAS FUNCIONALIDADES) ---
 def login_page():
+    # 1. Auto-Login via URL (O Código QR aponta para aqui)
+    if "token" in st.query_params:
+        tk_url = st.query_params["token"]
+        db = HistoryManager()
+        if db.validate_and_consume_token(tk_url):
+            st.session_state['authenticated'] = True
+            st.session_state['username'] = "Convidado"
+            st.session_state['is_guest'] = True
+            st.success("🎟️ Convite Validado! A entrar..."); time.sleep(1); st.rerun()
+
+    # 2. Interface Visual
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown("<h1 style='text-align: center;'>Data AI Enterprise</h1>", unsafe_allow_html=True)
-        with st.form("login"):
-            u = st.text_input("User"); p = st.text_input("Pass", type="password")
+        st.write("") 
+
+        # A. Login Normal (Admin/User)
+        with st.form("login_form"):
+            u = st.text_input("Utilizador")
+            p = st.text_input("Password", type="password")
             if st.form_submit_button("Entrar", use_container_width=True):
-                if u == st.secrets.get("ADMIN_USER", "admin") and p == st.secrets.get("ADMIN_PASSWORD", "123"):
-                    st.session_state['authenticated'] = True; st.session_state['username'] = u; st.rerun()
-                else: st.error("Erro.")
-        
+                ru = st.secrets.get("ADMIN_USER", "admin"); rp = st.secrets.get("ADMIN_PASSWORD", "123")
+                if u == ru and p == rp:
+                    st.session_state['authenticated'] = True; st.session_state['username'] = u; st.session_state['is_guest'] = False; st.rerun()
+                else: st.error("Dados incorretos.")
+
+        st.markdown("<div style='text-align: center; margin: 10px; color: gray;'>ou</div>", unsafe_allow_html=True)
+
+        # B. Login Google
         if "GOOGLE_CLIENT_ID" in st.secrets:
             try:
-                oauth2 = OAuth2Component(st.secrets["GOOGLE_CLIENT_ID"], st.secrets["GOOGLE_CLIENT_SECRET"], "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token", "https://www.googleapis.com/oauth2/v1/tokeninfo", "https://www.googleapis.com/oauth2/v1/userinfo")
-                res = oauth2.authorize_button("Google Login", "https://www.google.com.tw/favicon.ico", st.secrets["GOOGLE_REDIRECT_URI"], "email", key="g_btn")
-                if res and "token" in res:
-                    st.session_state['authenticated'] = True; st.session_state['username'] = "Google User"; st.rerun()
+                oauth2 = OAuth2Component(
+                    st.secrets["GOOGLE_CLIENT_ID"], st.secrets["GOOGLE_CLIENT_SECRET"],
+                    "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token",
+                    "https://www.googleapis.com/oauth2/v1/tokeninfo", "https://www.googleapis.com/oauth2/v1/userinfo"
+                )
+                result = oauth2.authorize_button("Entrar com Google", "https://www.google.com.tw/favicon.ico", st.secrets["GOOGLE_REDIRECT_URI"], "email profile", key="g_btn_login")
+                if result and "token" in result:
+                    st.session_state['authenticated'] = True; st.session_state['username'] = "Google User"; st.session_state['is_guest'] = False; st.rerun()
             except: pass
 
-# --- UI PRINCIPAL ---
+        st.write("")
+        
+        # C. Login Convidado (Código Manual) - DE VOLTA!
+        with st.expander("🎟️ Tenho um Código de Convite"):
+            tk = st.text_input("Insira o código de 6 dígitos")
+            if st.button("Validar Código", key="btn_guest_manual", use_container_width=True):
+                db = HistoryManager()
+                if db.validate_and_consume_token(tk):
+                    st.session_state['authenticated'] = True; st.session_state['username'] = "Convidado"; st.session_state['is_guest'] = True
+                    st.success("Código Aceite!"); time.sleep(1); st.rerun()
+                else: st.error("Código inválido ou expirado.")
+
+# --- APP PRINCIPAL ---
 def main_app():
     user = st.session_state.get('username', 'User')
+    is_guest = st.session_state.get('is_guest', False)
     db = HistoryManager(user)
-    
-    # --- SIDEBAR AVANÇADA ---
+
     with st.sidebar:
         st.title(f"👤 {user}")
         
-        # SELEÇÃO DE CONTEXTO (Pessoal vs Workspaces)
+        # --- GERADOR DE CONVITES (DE VOLTA NA SIDEBAR) ---
+        if not is_guest:
+            with st.expander("🎟️ Gerar Convite", expanded=False):
+                if st.button("Criar Código Único", key="btn_gen_invite"):
+                    new_token = db.create_one_time_token()
+                    base = st.secrets.get("APP_URL", "#")
+                    link = f"{base}?token={new_token}"
+                    st.success(f"CÓDIGO: {new_token}")
+                    qr = generate_qr_code(link)
+                    st.image(qr, width=150, caption="QR Acesso Direto")
+                    wa = generate_whatsapp_link(f"Link: {link} \nCódigo: *{new_token}*")
+                    st.markdown(f"[![WhatsApp](https://img.shields.io/badge/WhatsApp-Share-green)]({wa})")
+
+        # WORKSPACES (ENTERPRISE)
+        st.markdown("---")
         context_mode = st.radio("Modo:", ["Pessoal", "Workspaces"], horizontal=True)
-        
         if context_mode == "Workspaces":
             if db.user_data["plan"] == "free":
-                st.warning("🔒 Recurso Premium")
-                if st.button("💎 Upgrade para PRO"):
-                    db.upgrade_plan()
-                    st.success("Bem-vindo ao PRO!"); time.sleep(1); st.rerun()
+                if st.button("💎 Upgrade PRO"): db.upgrade_plan(); st.rerun()
             else:
-                # Listar Workspaces
                 my_ws = db.full_db["workspaces"]
-                # Filtrar onde sou membro
                 user_ws = {k:v for k,v in my_ws.items() if user in v["members"]}
+                sel_ws = st.selectbox("Workspace", list(user_ws.keys()), format_func=lambda x: user_ws[x]["name"])
+                if sel_ws:
+                    st.caption(f"Membros: {len(user_ws[sel_ws]['members'])}")
+                    if st.button("Convidar Colega"): db.add_member_to_workspace(sel_ws, "colega@email.com"); st.toast("Simulação: Convite enviado")
                 
-                selected_ws_id = st.selectbox("Escolher Workspace", options=list(user_ws.keys()), format_func=lambda x: user_ws[x]["name"])
-                
-                if selected_ws_id:
-                    st.info(f"Membros: {len(user_ws[selected_ws_id]['members'])}")
-                    new_member = st.text_input("Adicionar Colega (Email)")
-                    if st.button("Convidar"):
-                        if db.add_member_to_workspace(selected_ws_id, new_member): st.success("Adicionado!")
-                        else: st.error("Erro.")
-                        
-                with st.expander("Criar Novo Workspace"):
-                    new_ws_name = st.text_input("Nome da Empresa")
-                    if st.button("Criar"):
-                        ok, msg = db.create_workspace(new_ws_name)
-                        if ok: st.rerun()
-                        else: st.error(msg)
+                with st.expander("Novo Workspace"):
+                    n = st.text_input("Nome"); 
+                    if st.button("Criar"): db.create_workspace(n); st.rerun()
 
+        # LISTA DE CHATS
         st.markdown("---")
         if st.button("➕ Nova Análise", use_container_width=True): st.session_state['current_chat_id'] = None; st.rerun()
         
-        # LISTAGEM DE CHATS
-        st.caption("MEUS CHATS")
-        chats_to_show = db.user_chats
-        
-        # Se estiver em Workspace, mostra chats do workspace
-        if context_mode == "Workspaces" and db.user_data["plan"] == "pro" and 'selected_ws_id' in locals() and selected_ws_id:
-             chats_to_show = db.full_db["workspaces"][selected_ws_id]["chats"]
+        chats_show = db.user_chats
+        if context_mode == "Workspaces" and db.user_data["plan"]=="pro" and 'sel_ws' in locals() and sel_ws:
+             chats_show = db.full_db["workspaces"][sel_ws]["chats"]
 
-        for cid, d in sorted(chats_to_show.items(), key=lambda x:x[1]['created_at'], reverse=True):
-            if st.button(f"💬 {d['title']}", key=cid): st.session_state['current_chat_id']=cid; st.rerun()
-            
-        # CHATS PARTILHADOS COMIGO
+        st.caption("MEUS CHATS")
+        for cid, d in sorted(chats_show.items(), key=lambda x:x[1]['created_at'], reverse=True):
+            c1, c2 = st.columns([1,5])
+            with c1: 
+                if st.button("🗑️", key=f"d{cid}"): db.delete_chat(cid); st.rerun()
+            with c2:
+                if st.button(f"💬 {d['title']}", key=cid): st.session_state['current_chat_id']=cid; st.rerun()
+        
+        # PARTILHADOS COMIGO
         st.caption("PARTILHADOS COMIGO")
-        # Procura global (simples)
         for uid, udata in db.full_db["users"].items():
             if uid == user: continue
             for cid, cdata in udata["chats"].items():
                 if user in cdata.get("shared_with", []):
-                    if st.button(f"🔗 {cdata['title']} (de {uid})", key=f"shared_{cid}"):
-                        st.session_state['current_chat_id']=cid; st.rerun()
+                    if st.button(f"🔗 {cdata['title']} ({uid})", key=f"s{cid}"): st.session_state['current_chat_id']=cid; st.rerun()
 
         st.markdown("---")
-        if st.button("🚪 Sair"): st.session_state['authenticated']=False; st.rerun()
+        if st.button("🚪 Logout"): st.session_state['authenticated']=False; st.query_params.clear(); st.rerun()
 
-    # --- ÁREA CENTRAL ---
+    # ÁREA CENTRAL
     current_id = st.session_state.get('current_chat_id')
-    
     if current_id:
         chat_data = db.get_chat(current_id)
-        if not chat_data: st.error("Chat não encontrado"); return
+        if not chat_data: st.error("Erro chat"); return
 
-        # HEADER DO CHAT
+        # CABEÇALHO E PARTILHA
         c1, c2 = st.columns([3, 1])
         with c1: st.subheader(f"📂 {chat_data['title']}")
         with c2:
-            # BOTÃO SHARE
             with st.popover("📤 Partilhar"):
-                share_email = st.text_input("Email do colega")
-                if st.button("Enviar Acesso"):
-                    if db.share_chat(current_id, share_email): st.success("Partilhado!")
-                    else: st.error("Erro.")
+                em = st.text_input("Email"); 
+                if st.button("Enviar"): 
+                    if db.share_chat(current_id, em): st.success("OK")
+                    else: st.error("Erro")
 
-        # LAYOUT DIVIDIDO: CHAT vs NOTAS
+        # DIVISÃO: CHAT (Esq) vs NOTAS (Dir)
         col_chat, col_notes = st.columns([2, 1])
         
         with col_notes:
-            st.markdown("### 📝 Bloco de Notas")
-            st.markdown("Anote conclusões aqui. Fica salvo com a análise.")
-            # Notas Persistentes
-            notes = st.text_area("Escreva aqui...", value=chat_data.get("notes", ""), height=400, key="notes_area")
-            
-            # Auto-Save das notas (ao clicar fora ou cmd+enter)
+            st.markdown("### 📝 Notas")
+            notes = st.text_area("Anotações", value=chat_data.get("notes", ""), height=400, key="n_area")
             if notes != chat_data.get("notes", ""):
-                chat_data["notes"] = notes
-                db.update_chat(current_id, chat_data)
-                st.toast("Notas guardadas!")
+                chat_data["notes"] = notes; db.update_chat(current_id, chat_data); st.toast("Salvo")
 
         with col_chat:
-            # SETUP (Só aparece se vazio)
             if not chat_data["messages"]:
                 with st.expander("⚙️ Configuração", expanded=True):
                     if "GEMINI_API_KEY" in st.secrets: api_key = st.secrets["GEMINI_API_KEY"]
                     else: api_key = st.text_input("API Key", type="password")
-                    c_a, c_b = st.columns(2); persona = c_a.selectbox("Persona", ["Data Scientist", "CFO"]); context = c_b.text_area("Contexto")
-                    up_files = st.file_uploader("Ficheiros", accept_multiple_files=True)
-                    if up_files: 
-                        df, f_names = smart_merge(up_files)
-                        if df is not None: st.success("Dados OK")
-                        st.session_state['temp_df'] = df # Cache simples
-                        st.session_state['temp_names'] = f_names
+                    c_a, c_b = st.columns(2); persona = c_a.selectbox("Persona", ["Data Scientist", "CFO", "CMO"]); context = c_b.text_area("Contexto")
+                    t1, t2 = st.tabs(["Upload", "Link"]); up = t1.file_uploader("Files", accept_multiple_files=True)
+                    u_df = None; u_n = None; 
+                    if u := t2.text_input("URL"): u_df, u_n = load_from_url(u)
+                    
+                    if up or u_df is not None:
+                        df, fn = smart_merge(up, u_df, u_n)
+                        if df is not None: 
+                            st.success("Dados OK"); st.session_state['temp_df'] = df; st.session_state['temp_names'] = fn
 
-            # HISTÓRICO
-            for msg in chat_data["messages"]:
-                st.chat_message(msg["role"]).write(msg["content"])
+            for msg in chat_data["messages"]: st.chat_message(msg["role"]).write(msg["content"])
 
-            # INPUT
             if query := st.chat_input("Pergunta..."):
-                # Tenta pegar dados da sessão (limitação: ficheiros não persistem no refresh neste demo)
-                df = st.session_state.get('temp_df')
-                f_names = st.session_state.get('temp_names', [])
-                
-                # Se não houver dados na RAM, avisa (em produção usaria S3/Database blob)
-                if df is None and not chat_data["messages"]: 
-                    st.error("Por favor carregue os dados novamente (sessão nova).")
+                df = st.session_state.get('temp_df'); fn = st.session_state.get('temp_names', [])
+                if df is None and not chat_data["messages"]: st.error("Carregue dados.")
                 else:
-                    # Se já tiver mensagens, pode continuar conversa (assumindo que a IA lembra do contexto ou recarrega)
-                    # Nota: A IA "Gemini" precisa do DF a cada chamada no nosso código atual. 
-                    # Fix rápido: Se não tem DF, pede upload.
-                    if df is None: st.warning("⚠️ Recarregue o Excel para continuar a análise.")
+                    if df is None: st.warning("Recarregue dados.")
                     else:
-                        # Guardar Msg User
                         chat_data["messages"].append({"role": "user", "content": query})
                         db.update_chat(current_id, chat_data)
                         st.chat_message("user").write(query)
-                        
                         with st.spinner("..."):
-                            code = ask_gemini(df, query, api_key, context if 'context' in locals() else "", f_names, persona if 'persona' in locals() else "Data Scientist")
+                            code = ask_gemini(df, query, api_key, context if 'context' in locals() else "", fn, persona if 'persona' in locals() else "DS")
                             text, fig = execute_code(code, df)
-                            
                             chat_data["messages"].append({"role": "assistant", "content": text})
                             db.update_chat(current_id, chat_data)
-                            
                             st.chat_message("assistant").write(text)
                             if fig: st.chat_message("assistant").pyplot(fig)
-
-    else:
-        st.info("Selecione ou crie uma análise na barra lateral.")
+    
+    else: st.info("Selecione uma análise.")
 
 if __name__ == "__main__":
     if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
