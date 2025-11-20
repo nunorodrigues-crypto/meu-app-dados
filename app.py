@@ -1,16 +1,3 @@
-Tem toda a razão! Ao focar tanto nas novas funcionalidades empresariais (Workspaces, Notas, Partilha), acabei por "limpar" demais a interface de login e o gerador de convites da barra lateral. Peço desculpa por isso.
-
-Vamos corrigir já. Esta é a Versão 18.0 (A Versão Definitiva).
-
-Esta versão une tudo:
-
-Funcionalidades Enterprise: (Notas, Partilha, Workspaces, PDF).
-
-Acesso Universal: (Google, Admin Password E o regresso do QR Code/Token).
-
-Substitua TODO o app.py por este código:
-Python
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
