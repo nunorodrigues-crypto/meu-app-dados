@@ -1,18 +1,3 @@
-Tens toda a razão. No código anterior (V18), eu cometi um erro de lógica: coloquei a caixa de upload e o chat dentro da condição if current_id:.
-
-Ou seja: o sistema só mostrava as ferramentas se já existisse uma conversa aberta. Quando clicavas em "Nova Análise" (que define o ID como None), o sistema caía num vazio e não mostrava nada.
-
-Vamos corrigir isso. O comportamento correto deve ser:
-
-Nova Análise: Mostra o Upload aberto e pronto a usar.
-
-Conversa Existente: Mostra o Chat e o Upload fica recolhido.
-
-Aqui está a Versão 19.0 (Corrigida). Esta é a versão final com o fluxo de "Nova Análise" a funcionar perfeitamente.
-
-Substitui TODO o app.py:
-Python
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
