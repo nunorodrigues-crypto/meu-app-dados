@@ -5,3 +5,4 @@ seaborn
 openpyxl
 google-generativeai
 tabulate
+scikit-learn
