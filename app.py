@@ -36,6 +36,7 @@ def load_and_clean(file):
 def ask_gemini_for_code(df, query, api_key, context):
     genai.configure(api_key=api_key)
     
+    # Escolha do modelo (Tenta Pro, falha para Flash)
     chosen_model = "gemini-1.5-flash"
     try:
         for m in genai.list_models():
@@ -49,33 +50,38 @@ def ask_gemini_for_code(df, query, api_key, context):
     columns_info = df.dtypes.to_string()
     head_info = df.head(3).to_string()
 
-    # --- AQUI ESTÁ A MÁGICA DO CONTEXTO ---
+    # PROMPT BLINDADO CONTRA TEXTO SOLTO
     prompt = f"""
-    Você é um Consultor Estratégico de Negócios e Cientista de Dados.
+    Você é um Consultor Estratégico e Programador Python Expert.
     
     CONTEXTO DO CLIENTE:
     {context}
     
-    DADOS DISPONÍVEIS (Dataframe 'df'):
-    Estrutura: {columns_info}
-    Amostra: {head_info}
+    DADOS (df):
+    {columns_info}
+    {head_info}
     
-    PERGUNTA DO USUÁRIO: "{query}"
+    PERGUNTA: "{query}"
     
-    OBJETIVO:
-    1. Analisar os dados com Python para encontrar a resposta numérica.
-    2. Usar o 'print()' para escrever uma análise que misture os números com o CONTEXTO DO CLIENTE.
-    3. Se os dados mostrarem algo ruim/bom, explique o 'PORQUÊ' baseando-se no tipo de negócio descrito.
+    Sua missão é escrever um script Python que analise os dados e imprima a resposta.
     
-    REGRAS TÉCNICAS:
-    1. Use 'df' diretamente.
-    2. Se for uma tabela, use print(df.to_markdown()).
-    3. Gráficos: plt.figure(), plotar, NÃO usar plt.show().
-    4. APENAS CÓDIGO PYTHON.
+    REGRAS DE OURO (OBRIGATÓRIAS):
+    1. Todo e qualquer texto explicativo DEVE estar dentro de um print(). 
+       Exemplo CORRETO: print(f"A média foi {{media}}...")
+       Exemplo ERRADO: A média foi... (Isso quebra o código).
+    
+    2. Para análises longas ou com várias linhas, use print(''' SEU TEXTO AQUI ''') com aspas triplas.
+    
+    3. Primeiro calcule os números usando pandas (use a variável 'df').
+    4. Depois, faça a análise crítica misturando os números com o CONTEXTO DO CLIENTE.
+    5. Não use input(). Não use markdown (```). Retorne apenas o código puro.
     """
     
     response = model.generate_content(prompt)
-    return response.text.replace("```python", "").replace("```", "").strip()
+    
+    # Limpeza extra para garantir que não sobra lixo
+    code = response.text.replace("```python", "").replace("```", "").strip()
+    return code
 
 # --- 3. EXECUTOR ---
 def execute_generated_code(code, df):
@@ -88,8 +94,9 @@ def execute_generated_code(code, df):
         text_output = redirected_output.getvalue()
         return text_output, plt
     except Exception as e:
-        return f"Erro de Execução: {e}", None
-
+        # Mostra o erro E o código que causou o erro
+        return f"❌ Erro de Execução: {e}\n\n🔍 Código Gerado pela IA (Debug):\n{code}", None
+    
 # --- 4. INTERFACE ---
 def main():
     with st.sidebar:
