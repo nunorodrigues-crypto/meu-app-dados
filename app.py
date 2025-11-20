@@ -274,4 +274,26 @@ def main_app():
     df_final = None
     if up_files or url_df is not None:
         df_final, f_names = smart_merge(up_files, url_df, url_name)
-        if df_final is not None: st.
+        if df_final is not None: st.success("Dados OK")
+
+    for msg in messages: st.chat_message(msg["role"]).write(msg["content"])
+
+    if query := st.chat_input("Pergunta..."):
+        if not api_key or df_final is None: st.error("Falta dados.")
+        else:
+            if not current_id: current_id = db.create_chat(query); st.session_state['current_chat_id']=current_id
+            st.chat_message("user").write(query); db.add_message(current_id, "user", query)
+            with st.spinner("..."):
+                code = ask_gemini(df_final, query, api_key, context, f_names, persona)
+                text, fig = execute_code(code, df_final)
+                st.chat_message("assistant").write(text); db.add_message(current_id, "assistant", text)
+                if fig: st.chat_message("assistant").pyplot(fig)
+
+    if messages:
+        pdf = create_pdf(messages)
+        st.download_button("📄 PDF", pdf, "relatorio.pdf", key="btn_dl_pdf")
+
+if __name__ == "__main__":
+    if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
+    if st.session_state["authenticated"]: main_app()
+    else: login_page()
