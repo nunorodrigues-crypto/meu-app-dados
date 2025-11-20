@@ -31,6 +31,70 @@ def load_and_clean(file):
     except Exception as e:
         st.error(f"Erro ao ler ficheiro: {e}")
         return None
+# --- NOVA IMPORTAÇÃO NO TOPO DO FICHEIRO ---
+from sklearn.linear_model import LinearRegression
+import numpy as np
+
+# --- FUNÇÃO DE ML (PREVISÃO) ---
+def run_ml_forecast(df):
+    try:
+        # 1. Preparar Dados: Agrupar por Data
+        # Procura colunas de data e valor
+        date_col = None
+        val_col = None
+        
+        for c in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df[c]):
+                date_col = c
+            elif pd.api.types.is_numeric_dtype(df[c]) and "id" not in c.lower():
+                val_col = c
+        
+        if not date_col or not val_col:
+            return "Não encontrei colunas de Data ou Valor numérico suficientes para previsão.", None
+
+        # Agrupar vendas por dia
+        df_ml = df.groupby(date_col)[val_col].sum().reset_index()
+        df_ml = df_ml.sort_values(date_col)
+
+        # 2. Engenharia de Features (Data -> Número)
+        df_ml['Date_Num'] = df_ml[date_col].map(pd.Timestamp.toordinal)
+        
+        X = df_ml[['Date_Num']] # Features (Tempo)
+        y = df_ml[val_col]      # Target (Vendas)
+
+        # 3. Treinar o Modelo (Linear Regression)
+        model = LinearRegression()
+        model.fit(X, y)
+
+        # 4. Prever Futuro (30 dias)
+        last_date = df_ml['Date_Num'].max()
+        future_dates_num = np.array([last_date + i for i in range(1, 31)]).reshape(-1, 1)
+        future_sales = model.predict(future_dates_num)
+
+        # 5. Criar Gráfico
+        fig, ax = plt.subplots(figsize=(10, 5))
+        
+        # Dados Reais (Pontos Azuis)
+        ax.scatter(df_ml[date_col], y, color='blue', label='Dados Reais')
+        
+        # Linha de Tendência (Vermelha)
+        ax.plot(df_ml[date_col], model.predict(X), color='red', linestyle='--', label='Tendência Atual')
+        
+        # Previsão Futura (Pontos Verdes)
+        future_dates = [pd.Timestamp.fromordinal(int(d[0])) for d in future_dates_num]
+        ax.plot(future_dates, future_sales, color='green', linewidth=2, label='Previsão ML (30 dias)')
+        
+        ax.set_title(f"Previsão de Machine Learning: {val_col} vs Tempo")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        total_predicted = sum(future_sales)
+        
+        return f"O modelo de ML prevê um total de **{total_predicted:,.2f}** para os próximos 30 dias.", fig
+
+    except Exception as e:
+        return f"Erro no ML: {e}", None
+
 
 # --- 2. CÉREBRO GEMINI COM CONTEXTO ---
 def ask_gemini_for_code(df, query, api_key, context):
@@ -133,6 +197,29 @@ def main():
         
         with st.expander("Ver Tabela de Dados", expanded=False):
             st.dataframe(df.head())
+            # --- SECÇÃO DE MACHINE LEARNING ---
+        st.markdown("### 🔮 Previsão do Futuro (Machine Learning)")
+        
+        col1, col2 = st.columns([1, 3])
+        
+        with col1:
+            if st.button("Treinar Modelo de IA"):
+                with st.spinner("A treinar regressão linear..."):
+                    ml_text, ml_fig = run_ml_forecast(df)
+                    
+                    if ml_fig:
+                        st.success("Modelo treinado com sucesso!")
+                        # Guardar na sessão para não sumir
+                        st.session_state['ml_fig'] = ml_fig
+                        st.session_state['ml_text'] = ml_text
+                    else:
+                        st.warning(ml_text)
+
+        with col2:
+            # Se já existir previsão, mostra
+            if 'ml_fig' in st.session_state:
+                st.write(st.session_state['ml_text'])
+                st.pyplot(st.session_state['ml_fig'])
 
         # Chat
         query = st.chat_input("Pergunte sobre KPIs, tendências ou causas...")
