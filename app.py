@@ -146,30 +146,68 @@ def generate_whatsapp_link(text):
     return f"https://wa.me/?text={urllib.parse.quote(text)}"
 
 def login_page():
-    # Estilo para centrar
-    col1, col2, col3 = st.columns([1, 2, 1])
+    st.markdown("<h2 style='text-align: center;'>🔐 Acesso Seguro</h2>", unsafe_allow_html=True)
     
+    # Verifica se há token na URL para auto-login
+    if "token" in st.query_params:
+        token_url = st.query_params["token"]
+        db = HistoryManager()
+        if db.validate_and_consume_token(token_url):
+            st.session_state['authenticated'] = True
+            st.session_state['username'] = "Convidado"
+            st.session_state['is_guest'] = True
+            st.success("🚀 Token Validado! A entrar..."); time.sleep(1); st.rerun()
+
+    col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        st.markdown("<h1 style='text-align: center;'>Data AI Hub</h1>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: gray;'>Faça login para continuar</p>", unsafe_allow_html=True)
-        st.write("") # Espaço
+        tab_google, tab_admin, tab_guest = st.tabs(["🔵 Google", "🔑 Admin", "🎫 Código"])
+        
+        # --- LOGIN GOOGLE (CORRIGIDO) ---
+        with tab_google:
+            if "GOOGLE_CLIENT_ID" in st.secrets:
+                try:
+                    oauth2 = OAuth2Component(
+                        st.secrets["GOOGLE_CLIENT_ID"], st.secrets["GOOGLE_CLIENT_SECRET"],
+                        "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token",
+                        "https://www.googleapis.com/oauth2/v1/tokeninfo", "https://www.googleapis.com/oauth2/v1/userinfo"
+                    )
+                    
+                    # AQUI ESTAVA O ERRO: Agora forçamos os nomes dos parâmetros
+                    result = oauth2.authorize_button(
+                        name="Entrar com Google",
+                        icon="https://www.google.com.tw/favicon.ico",
+                        redirect_uri=st.secrets["GOOGLE_REDIRECT_URI"],
+                        scope="email profile",
+                        key="google_btn"
+                    )
+                    
+                    if result and "token" in result:
+                        st.session_state['authenticated'] = True
+                        st.session_state['username'] = "Google User"
+                        st.session_state['is_guest'] = False
+                        st.success("Sucesso! A redirecionar..."); time.sleep(1); st.rerun()
+                except Exception as e:
+                    st.warning(f"Erro Google: {e}")
+            else:
+                st.warning("Configuração Google pendente.")
 
-        # 1. FORMULÁRIO DE USER/PASS
-        with st.form("login_form"):
-            u = st.text_input("Utilizador")
-            p = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Entrar no Sistema", use_container_width=True)
-            
-            if submitted:
-                ru = st.secrets.get("ADMIN_USER", "admin"); rp = st.secrets.get("ADMIN_PASSWORD", "123")
-                if u == ru and p == rp:
-                    st.session_state['authenticated'] = True
-                    st.session_state['username'] = u
-                    st.session_state['is_guest'] = False
-                    st.rerun()
-                else: st.error("Dados incorretos.")
+        # --- LOGIN ADMIN ---
+        with tab_admin:
+            u = st.text_input("User Admin"); p = st.text_input("Password", type="password")
+            if st.button("Entrar Admin", use_container_width=True):
+                if u == st.secrets.get("ADMIN_USER") and p == st.secrets.get("ADMIN_PASSWORD"):
+                    st.session_state['authenticated'] = True; st.session_state['username'] = u; st.session_state['is_guest'] = False; st.rerun()
+                else: st.error("Erro.")
 
-        st.markdown("<div style='text-align: center; margin: 10px;'>ou</div>", unsafe_allow_html=True)
+        # --- LOGIN CONVIDADO (CÓDIGO) ---
+        with tab_guest:
+            tk = st.text_input("Código de 6 dígitos")
+            if st.button("Validar Código", use_container_width=True):
+                db = HistoryManager()
+                if db.validate_and_consume_token(tk):
+                    st.session_state['authenticated'] = True; st.session_state['username'] = "Convidado"; st.session_state['is_guest'] = True
+                    st.success("Código Válido!"); time.sleep(1); st.rerun()
+                else: st.error("Inválido/Usado.")
 
         # 2. BOTÃO GOOGLE (FORA DO FORM)
         if "GOOGLE_CLIENT_ID" in st.secrets:
