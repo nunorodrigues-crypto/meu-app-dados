@@ -9,3 +9,4 @@ scikit-learn
 fpdf
 requests
 qrcode
+streamlit-oauth
