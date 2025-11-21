@@ -329,7 +329,6 @@ def smart_merge(files=None, url_df=None, url_name=None):
 def ask_gemini(df, query, api_key, context, file_list, persona):
     genai.configure(api_key=api_key)
     
-    # Auto-select Model
     chosen_model = "gemini-pro"
     try:
         for m in genai.list_models():
@@ -339,12 +338,41 @@ def ask_gemini(df, query, api_key, context, file_list, persona):
     
     model = genai.GenerativeModel(chosen_model)
     
-    # Definição de Personas
-    persona_text = "Atue como um Cientista de Dados Sênior."
-    if persona == "CFO": 
-        persona_text = "Atue como um CFO (Diretor Financeiro). Foco: Lucro, ROI, Eficiência, Corte de Custos."
-    elif persona == "CMO": 
-        persona_text = "Atue como um CMO (Diretor de Marketing). Foco: Crescimento, Marca, Clientes, Conversão."
+    p_txt = "Atue como Data Scientist."
+    if persona == "CFO": p_txt = "Atue como CFO."
+    elif persona == "CMO": p_txt = "Atue como CMO."
+    
+    prompt = f"""
+    {p_txt}
+    CONTEXTO: {context}
+    DADOS: {', '.join(file_list)}
+    ESTRUTURA: {df.dtypes.to_string()}
+    PERGUNTA: "{query}"
+    
+    REGRAS CRÍTICAS:
+    1. Se a pergunta pede uma opinião ou conclusão (ex: "Qual o melhor?"), escreva a resposta dentro de um print().
+       Exemplo: print("O melhor canal é X porque...")
+    2. Responda SEMPRE dentro de um bloco ```python ... ```.
+    3. Use 'df' para cálculos.
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        
+        # --- SISTEMA DE SEGURANÇA ANTI-ERRO ---
+        match = re.search(r"```python(.*?)```", response.text, re.DOTALL)
+        
+        if match:
+            # Se enviou código direitinho, usa o código
+            return match.group(1).strip()
+        else:
+            # SE FALHOU E MANDOU TEXTO: Transforma o texto em código Python válido
+            # Remove aspas para não dar erro de sintaxe
+            clean_text = response.text.replace('"', "'").replace("\n", " ")
+            return f"print(\"{clean_text}\")"
+            
+    except Exception as e:
+        return f"print('Erro de ligação à IA: {e}')"
     
     # Prompt com IMPORT OBRIGATÓRIO para corrigir erro 'pd not defined'
     
