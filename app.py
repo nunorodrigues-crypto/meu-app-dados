@@ -347,26 +347,27 @@ def ask_gemini(df, query, api_key, context, file_list, persona):
         persona_text = "Atue como um CMO (Diretor de Marketing). Foco: Crescimento, Marca, Clientes, Conversão."
     
     # Prompt com IMPORT OBRIGATÓRIO para corrigir erro 'pd not defined'
+    
     prompt = f"""
     {persona_text}
     
     CONTEXTO DE NEGÓCIO: {context}
-    Ficheiros: {', '.join(file_list)}
-    Estrutura dos Dados (df): {df.dtypes.to_string()}
+    NOMES DOS FICHEIROS CARREGADOS: {', '.join(file_list)}
+    
+    ESTRUTURA DOS DADOS (DataFrame 'df'):
+    {df.dtypes.to_string()}
     
     PERGUNTA DO UTILIZADOR: "{query}"
     
-    REGRAS DE CÓDIGO (CRÍTICO):
-    1. A sua resposta deve conter APENAS um bloco de código Python (```python).
-    2. O código DEVE começar com os imports:
-       import pandas as pd
-       import matplotlib.pyplot as plt
-       import seaborn as sns
-       import numpy as np
-    3. A variável com os dados chama-se 'df'.
-    4. Use print() para escrever a sua análise textual.
+    REGRAS OBRIGATÓRIAS (CRÍTICO):
+    1. NÃO use pd.read_csv() nem pd.read_excel(). Os ficheiros NÃO estão no disco.
+    2. Os dados JÁ estão carregados na memória na variável 'df'. Use APENAS 'df'.
+    3. Comece sempre com os imports: import pandas as pd; import matplotlib.pyplot as plt; import seaborn as sns; import numpy as np
+    4. Use print() para escrever a resposta de texto.
     5. Use plt.figure() para criar gráficos.
     """
+    
+    # ... (o resto da função continua igual) ...
     
     try:
         response = model.generate_content(prompt)
