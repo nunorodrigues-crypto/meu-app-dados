@@ -338,34 +338,45 @@ def ask_gemini(df, query, api_key, context, file_list, persona):
     
     model = genai.GenerativeModel(chosen_model)
     
-    p_txt = "Atue como Data Scientist."
-    if persona == "CFO": p_txt = "Atue como CFO."
-    elif persona == "CMO": p_txt = "Atue como CMO."
+    p_txt = "Atue como Data Scientist Senior."
+    if persona == "CFO": p_txt = "Atue como CFO focado em eficiência financeira."
+    elif persona == "CMO": p_txt = "Atue como CMO focado em performance de marketing."
     
-    # O SEGREDO ESTÁ NESTAS REGRAS NOVAS:
+    # --- PROMPT 'SHERLOCK' (DETECTA ESTRUTURA) ---
     prompt = f"""
     {p_txt}
-    CONTEXTO: {context}
-    DADOS: {', '.join(file_list)}
-    ESTRUTURA: {df.dtypes.to_string()}
+    
+    CONTEXTO DO CLIENTE: {context}
+    FICHEIROS: {', '.join(file_list)}
+    
+    --- ANÁLISE DA ESTRUTURA DOS DADOS ---
+    ESTRUTURA (dtypes):
+    {df.dtypes.to_string()}
+    
+    AMOSTRA (Primeiras 5 linhas):
+    {df.head(5).to_markdown()}
+    
     PERGUNTA: "{query}"
     
-    REGRAS CRÍTICAS E OBRIGATÓRIAS:
-    1. NÃO tente ler ficheiros (NÃO use read_csv ou read_excel).
-    2. Os dados JÁ estão na variável 'df'. Use APENAS 'df'.
-    3. Imports OBRIGATÓRIOS no início: import pandas as pd; import matplotlib.pyplot as plt; import seaborn as sns; import numpy as np
-    4. Responda APENAS com código Python (dentro de ```python).
-    5. Use print() para texto e plt.figure() para gráficos.
+    --- INSTRUÇÕES CRÍTICAS DE PYTHON ---
+    1. NÃO assuma nomes de colunas. Olhe para a 'AMOSTRA' acima.
+    2. SE os canais (Facebook, Instagram, etc.) forem COLUNAS:
+       - Você deve somar ou filtrar essas colunas específicas.
+       - Exemplo: total_facebook = df['facebook'].sum()
+    3. SE existir uma coluna 'parâmetro' ou 'metric':
+       - Filtre as linhas. Ex: df[df['parâmetro'] == 'Investimento']
+    4. Limpeza: Se houver símbolos de moeda ('€', 'R$'), remova-os e converta para float antes de calcular.
+    5. Responda APENAS com código Python (dentro de ```python).
+    6. NÃO use pd.read_csv(). Use 'df'.
+    7. Use print() para a resposta final e plt.figure() para gráficos.
     """
     
     try:
         response = model.generate_content(prompt)
         match = re.search(r"```python(.*?)```", response.text, re.DOTALL)
         return match.group(1).strip() if match else response.text.replace("```", "").strip()
-    except Exception as e: return f"print('Erro IA: {e}')"
-    
-    try:
-        response = model.generate_content(prompt)
+    except Exception as e:
+        return f"print('Erro de Raciocínio da IA: {e}')"
         
         # --- SISTEMA DE SEGURANÇA ANTI-ERRO ---
         match = re.search(r"```python(.*?)```", response.text, re.DOTALL)
