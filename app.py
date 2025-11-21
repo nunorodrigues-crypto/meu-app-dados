@@ -342,6 +342,7 @@ def ask_gemini(df, query, api_key, context, file_list, persona):
     if persona == "CFO": p_txt = "Atue como CFO."
     elif persona == "CMO": p_txt = "Atue como CMO."
     
+    # O SEGREDO ESTÁ NESTAS REGRAS NOVAS:
     prompt = f"""
     {p_txt}
     CONTEXTO: {context}
@@ -349,12 +350,19 @@ def ask_gemini(df, query, api_key, context, file_list, persona):
     ESTRUTURA: {df.dtypes.to_string()}
     PERGUNTA: "{query}"
     
-    REGRAS CRÍTICAS:
-    1. Se a pergunta pede uma opinião ou conclusão (ex: "Qual o melhor?"), escreva a resposta dentro de um print().
-       Exemplo: print("O melhor canal é X porque...")
-    2. Responda SEMPRE dentro de um bloco ```python ... ```.
-    3. Use 'df' para cálculos.
+    REGRAS CRÍTICAS E OBRIGATÓRIAS:
+    1. NÃO tente ler ficheiros (NÃO use read_csv ou read_excel).
+    2. Os dados JÁ estão na variável 'df'. Use APENAS 'df'.
+    3. Imports OBRIGATÓRIOS no início: import pandas as pd; import matplotlib.pyplot as plt; import seaborn as sns; import numpy as np
+    4. Responda APENAS com código Python (dentro de ```python).
+    5. Use print() para texto e plt.figure() para gráficos.
     """
+    
+    try:
+        response = model.generate_content(prompt)
+        match = re.search(r"```python(.*?)```", response.text, re.DOTALL)
+        return match.group(1).strip() if match else response.text.replace("```", "").strip()
+    except Exception as e: return f"print('Erro IA: {e}')"
     
     try:
         response = model.generate_content(prompt)
