@@ -226,12 +226,73 @@ class HistoryManager:
         return False
 
 # --- 3. FUNÇÕES DE PROCESSAMENTO DE DADOS ---
+def convert_currency_to_float(val):
+    """
+    Blindagem: Converte strings de moeda (ex: '1.200,50 €') para float (1200.50).
+    Remove erros comuns de formatação europeia vs americana.
+    """
+    if isinstance(val, (int, float)): return val
+    if pd.isna(val) or val == '': return 0.0
+    
+    val = str(val).strip()
+    # Remove símbolos de moeda comuns e espaços
+    val = re.sub(r'[€R$£¥ ]', '', val)
+    
+    try:
+        # Detetar formato Europeu/Brasil (1.000,00) vs Americano (1,000.00)
+        if ',' in val and '.' in val:
+            if val.find('.') < val.find(','): # Estilo 1.200,50
+                val = val.replace('.', '').replace(',', '.')
+            else: # Estilo 1,200.50
+                val = val.replace(',', '')
+        elif ',' in val: # Apenas vírgula (1200,50) -> troca por ponto
+            val = val.replace(',', '.')
+            
+        return float(val)
+    except:
+        return 0.0
+
+def smart_clean_dataframe(df):
+    """
+    Blindagem: Percorre o Excel e corrige automaticamente Datas e Dinheiro
+    antes que a IA possa cometer erros.
+    """
+    # 1. Remover Linhas Vazias
+    df.dropna(how='all', inplace=True)
+    
+    # 2. Normalizar Datas (Tenta converter tudo o que parece data)
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            try:
+                df[col] = pd.to_datetime(df[col])
+            except:
+                pass
+
+    # 3. Normalizar Dinheiro (Deteta colunas com números misturados com texto)
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            # Verifica numa amostra se existem dígitos
+            sample = df[col].astype(str).head(10).tolist()
+            if any(c.isdigit() for s in sample for c in s):
+                try:
+                    # Aplica a blindagem de moeda
+                    df[col] = df[col].apply(convert_currency_to_float)
+                except:
+                    pass
+    return df
+
+# --- FUNÇÕES ORIGINAIS MODIFICADAS ---
+
 def clean_individual_df(df, filename):
-    """Limpa dados e normaliza datas."""
+    """Limpa dados com a nova blindagem e normaliza datas."""
+    
+    # APLICA A BLINDAGEM AQUI
+    df = smart_clean_dataframe(df)
+    
     df.drop_duplicates(inplace=True)
     date_col = None
     
-    # Tenta detetar coluna de data
+    # Tenta detetar coluna de data (agora mais fiável porque o smart_clean já correu)
     for col in df.columns:
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             date_col = col
@@ -279,6 +340,7 @@ def smart_merge(files=None, url_df=None, url_name=None):
                 if f.name.endswith('.csv'): df = pd.read_csv(f)
                 else: df = pd.read_excel(f)
                 
+                # Chama a função de limpeza melhorada
                 clean_df, has_date = clean_individual_df(df, f.name)
                 
                 if has_date:
@@ -323,77 +385,72 @@ def smart_merge(files=None, url_df=None, url_name=None):
             return df_final.fillna(0), file_names
 
     except Exception as e:
-        return None, f"Erro na fusão: {e}"
+        return None, f"Erro na fusão: {e}
 
 # --- 4. CÉREBRO DE IA (GEMINI) ---
 def ask_gemini(df, query, api_key, context, file_list, persona):
     genai.configure(api_key=api_key)
     
-    # 1. Seleção de Modelo Robusta
+    # 1. Seleção de Modelo
     chosen_model = "gemini-pro"
     try:
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         if 'models/gemini-1.5-pro' in models: chosen_model = 'models/gemini-1.5-pro'
-        elif 'models/gemini-1.5-flash' in models: chosen_model = 'models/gemini-1.5-flash'
     except: pass
     
     model = genai.GenerativeModel(chosen_model)
     
-    # 2. Definição de Personas (INCLUINDO COO)
+    # 2. Personas com Foco "Blindado"
     personas_prompts = {
-        "Data Scientist": "Atue como Data Scientist Senior. Foco em: Análise exploratória, correlações estatísticas, limpeza de dados e deteção de anomalias (outliers).",
-        "CFO (Financeiro)": "Atue como CFO (Diretor Financeiro). Foco em: Rentabilidade, EBITDA, Margens, Cash Flow, Custos e ROI.",
-        "CMO (Marketing)": "Atue como CMO (Diretor de Marketing). Foco em: CAC, LTV, Performance de canais, Conversão e Churn.",
-        "COO (Operacional)": "Atue como COO (Diretor de Operações). Foco em: Eficiência Operacional, Logística, Prazos, Stocks, Gargalos e volume de transações."
+        "Data Scientist": "Atue como Data Scientist Senior. Seja técnico, preciso e procure correlações estatísticas.",
+        "CFO (Financeiro)": "Atue como CFO. Foque EXCLUSIVAMENTE em métricas financeiras (Receita, Custo, Margem, Lucro). Ignore métricas de vaidade.",
+        "CMO (Marketing)": "Atue como CMO. Foque em Conversão, CAC, ROAS e Canais de Aquisição.",
+        "COO (Operacional)": "Atue como COO. Foque em Eficiência, Volume de Pedidos, Prazos e Logística."
     }
-    
     p_txt = personas_prompts.get(persona, "Atue como Analista de Dados.")
     
-    # 3. Prompt Blindado
+    # 3. EXTRAÇÃO DE METADADOS (Para a IA não alucinar colunas)
+    # Cria uma lista limpa tipo: "- valor_venda (float64)"
+    columns_info = "\n".join([f"- {col} ({dtype})" for col, dtype in df.dtypes.items()])
+
+    # 4. PROMPT DE ENGENHARIA ESTRITA
     prompt = f"""
     {p_txt}
-    CONTEXTO: {context} | FICHEIROS: {', '.join(file_list)}
     
-    ESTRUTURA DOS DADOS (dtypes):
-    {df.dtypes.to_string()}
+    CONTEXTO DO NEGÓCIO: {context}
     
-    PERGUNTA: "{query}"
+    --- DADOS DISPONÍVEIS (DATAFRAME 'df') ---
+    O dataframe 'df' JÁ ESTÁ LIMPO e carregado em memória.
+    As colunas exatas disponíveis são:
+    {columns_info}
     
-    --- REGRAS DE CODIGO ---
-    1. O dataframe chama-se 'df'. JÁ EXISTE. NÃO use read_csv.
-    2. Imports obrigatórios: import pandas as pd; import matplotlib.pyplot as plt; import seaborn as sns; import numpy as np
-    3. Gráficos: Use plt.figure() e depois plt/sns. NÃO use plt.show().
-    4. Texto: Use print().
-    5. Limpeza: Remova símbolos de moeda (€, R$) antes de cálculos matemáticos.
-    6. Responda APENAS com código Python dentro de ```python ... ```
+    PERGUNTA DO UTILIZADOR: "{query}"
+    
+    --- REGRAS DE OURO (PYTHON) ---
+    1. USE APENAS AS COLUNAS LISTADAS ACIMA. Não invente nomes.
+    2. NÃO use pd.read_csv(). Use a variável 'df' diretamente.
+    3. Importe sempre: import pandas as pd; import matplotlib.pyplot as plt; import seaborn as sns; import numpy as np
+    4. Valores monetários JÁ SÃO FLOAT. Não tente limpar strings com .replace(). Apenas calcule.
+    5. Gráficos: Use plt.figure(figsize=(10,6)) antes de plotar. Use sns.barplot, sns.lineplot, etc.
+    6. Responda APENAS com código Python executável dentro de blocos ```python ... ```.
     """
     
     try:
         response = model.generate_content(prompt)
+        
+        # Extração segura do código
         match = re.search(r"```python(.*?)```", response.text, re.DOTALL)
-        if match: return match.group(1).strip()
-        
-        # Fallback se a IA falhar a formatação
-        clean = response.text.replace("```", "").strip()
-        if "print" in clean or "plt" in clean: return clean
-        return f"print('Erro formato IA: {clean}')"
-    except Exception as e:
-        return f"print('Erro IA: {e}')"
-        
-        # --- SISTEMA DE SEGURANÇA ANTI-ERRO ---
-        match = re.search(r"```python(.*?)```", response.text, re.DOTALL)
-        
         if match:
-            # Se enviou código direitinho, usa o código
             return match.group(1).strip()
         else:
-            # SE FALHOU E MANDOU TEXTO: Transforma o texto em código Python válido
-            # Remove aspas para não dar erro de sintaxe
-            clean_text = response.text.replace('"', "'").replace("\n", " ")
-            return f"print(\"{clean_text}\")"
+            # Fallback: Se a IA esquecer os backticks, tenta usar o texto se parecer código
+            clean_text = response.text.replace("```", "").strip()
+            if "plt." in clean_text or "print" in clean_text:
+                return clean_text
+            return f"print('A IA não gerou código válido. Resposta: {clean_text}')"
             
     except Exception as e:
-        return f"print('Erro de ligação à IA: {e}')"
+        return f"print('Erro crítico na IA: {e}')"
     
     # Prompt com IMPORT OBRIGATÓRIO para corrigir erro 'pd not defined'
     
@@ -431,27 +488,34 @@ def execute_code(code, df):
         import matplotlib.pyplot as plt
         import seaborn as sns
         
-        # LIMPEZA CRÍTICA (Evita gráficos misturados)
-        plt.clf()
-        plt.close('all')
+        plt.clf(); plt.close('all') 
         
+        # 1. FILTRO DE SEGURANÇA (BLACKLIST)
+        dangerous = ["os.", "sys.", "subprocess", "open(", "delete", "rm -rf", "import os", "import sys", "__import__"]
+        for word in dangerous:
+            if word in code:
+                return "⚠️ BLOQUEADO: Tentativa de código não seguro detetada.", None
+
         old_stdout = sys.stdout
         redirected_output = sys.stdout = StringIO()
         
-        local_vars = {'df': df, 'pd': pd, 'plt': plt, 'sns': sns, 'np': np}
-        exec(code, {}, local_vars)
+        # 2. SANDBOX (Só permite estas ferramentas)
+        safe_locals = {'df': df, 'pd': pd, 'plt': plt, 'sns': sns, 'np': np, 're': re}
+        
+        # Executa sem acesso aos comandos do sistema
+        exec(code, {"__builtins__": {}}, safe_locals)
         
         sys.stdout = old_stdout
-        text_out = redirected_output.getvalue()
+        text_output = redirected_output.getvalue()
         
-        # Captura gráfico se existir
         fig = plt.gcf()
         if not plt.gca().has_data(): fig = None
         
-        return text_out, fig
+        return text_output, fig
+
     except Exception as e:
         sys.stdout = sys.__stdout__
-        return f"Erro Código: {e}", None
+        return f"❌ Erro de Execução: {str(e)}", None
 
 def generate_role_insights(df, persona, api_key, context, file_list):
     # Perguntas automáticas por cargo
