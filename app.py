@@ -746,7 +746,7 @@ def main_app():
             
             # --- NOVO: BOTÃO RELATÓRIO AUTOMÁTICO ---
             if up_files or url_df is not None:
-            df, fn = smart_merge(up_files, url_df, url_name)
+                df, fn = smart_merge(up_files, url_df, url_name)
             
             # --- AQUI COMEÇA O BLOCO QUE DEU ERRO ---
             if df is not None:
