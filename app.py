@@ -740,26 +740,40 @@ def main_app():
         if up_files or url_df is not None:
             df, fn = smart_merge(up_files, url_df, url_name)
             if df is not None:
-            st.success(f"✅ {len(fn)} Fontes de Dados Conectadas!")
-            st.session_state['temp_df'] = df
-            st.session_state['temp_files'] = fn
+                st.success(f"✅ {len(fn)} Fontes de Dados Conectadas!")
+                st.session_state['temp_df'] = df
+                st.session_state['temp_files'] = fn
             
             # --- NOVO: BOTÃO RELATÓRIO AUTOMÁTICO ---
-            if st.button(f"🚀 Relatório Automático ({persona})", use_container_width=True):
-                if not api_key: st.error("Falta API Key")
-                else:
-                    new_id = db.create_chat(f"Relatório Auto: {persona}", workspace_id=selected_ws_id)
-                    with st.spinner("A gerar relatório..."):
-                        q, code = generate_role_insights(df, persona, api_key, context, fn)
-                        txt, fig = execute_code(code, df)
-                        
-                        # Salvar
-                        c_data = db.get_chat(new_id)
-                        c_data["messages"].extend([{"role": "user", "content": q}, {"role": "assistant", "content": txt}])
-                        db.update_chat(new_id, c_data)
-                        
-                        st.session_state['current_chat_id'] = new_id
-                        st.rerun()
+            if up_files or url_df is not None:
+            df, fn = smart_merge(up_files, url_df, url_name)
+            
+            # --- AQUI COMEÇA O BLOCO QUE DEU ERRO ---
+            if df is not None:
+                st.success(f"✅ {len(fn)} Fontes de Dados Conectadas!")
+                st.session_state['temp_df'] = df
+                st.session_state['temp_files'] = fn
+                
+                # --- BOTÃO RELATÓRIO AUTOMÁTICO ---
+                if st.button(f"🚀 Relatório Automático ({persona})", use_container_width=True):
+                    if not api_key:
+                        st.error("Falta API Key")
+                    else:
+                        new_id = db.create_chat(f"Relatório Auto: {persona}", workspace_id=selected_ws_id)
+                        with st.spinner("A gerar relatório..."):
+                            q, code = generate_role_insights(df, persona, api_key, context, fn)
+                            txt, fig = execute_code(code, df)
+                            
+                            c_data = db.get_chat(new_id)
+                            c_data["messages"].extend([{"role": "user", "content": q}, {"role": "assistant", "content": txt}])
+                            db.update_chat(new_id, c_data)
+                            
+                            st.session_state['current_chat_id'] = new_id
+                            st.rerun()
+                # ----------------------------------------
+
+                with st.expander("Visualizar Dados"):
+                    st.dataframe(df.head())
             # ----------------------------------------
 
             with st.expander("Visualizar Dados"):
