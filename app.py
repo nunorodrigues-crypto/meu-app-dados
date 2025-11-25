@@ -1,11 +1,3 @@
-Peço desculpa mais uma vez. O erro foi meu: ao tentar organizar o código para a resposta, o sistema tentou "resumir" partes que pareciam repetitivas (como a classe HistoryManager e o CSS), o que cortou essas linhas essenciais.
-
-Aqui está o código COMPLETO, restaurado linha por linha com base no teu original, apenas com as correções da IA e o novo botão COO inseridos cirurgicamente.
-
-Não falta nada aqui (Login, PDF, Tokens, CSS, Estrutura de JSON, tudo mantido).
-
-Python
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
