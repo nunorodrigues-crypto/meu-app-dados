@@ -616,9 +616,7 @@ def main_app():
     # --- BARRA LATERAL (SIDEBAR) ---
     with st.sidebar:
         # Logo e Info User
-        c_logo, c_txt = st.columns([1, 3])
-        with c_logo: 
-            st.image("https://cdn-icons-png.flaticon.com/512/8637/8637099.png", width=50)
+        st.header("👁️ AInsight")
         with c_txt: 
             st.markdown("### AInsight")
             st.caption(f"Logado como: {user}")
