@@ -17,7 +17,7 @@ import requests
 import qrcode
 import urllib.parse
 from streamlit_oauth import OAuth2Component
-import numpy as np # Importação necessária
+import numpy as np # Importação explícita no topo
 
 # --- 1. CONFIGURAÇÃO GERAL ---
 st.set_page_config(
@@ -267,8 +267,6 @@ def load_from_url(url):
     except Exception as e:
         return None, str(e)
 
-# ADICIONADO: Cache para melhorar performance (única alteração aqui)
-@st.cache_data(ttl=3600, show_spinner="A processar e unificar dados...")
 def smart_merge(files=None, url_df=None, url_name=None):
     """Funde múltiplos ficheiros numa Super Tabela."""
     dataframes = []
@@ -327,40 +325,22 @@ def smart_merge(files=None, url_df=None, url_name=None):
     except Exception as e:
         return None, f"Erro na fusão: {e}"
 
-# --- 4. CÉREBRO DE IA (GEMINI) - CORRIGIDO E ATUALIZADO ---
+# --- 4. CÉREBRO DE IA (GEMINI) ---
 def ask_gemini(df, query, api_key, context, file_list, persona):
     genai.configure(api_key=api_key)
     
     chosen_model = "gemini-pro"
     try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        if 'models/gemini-1.5-pro' in models: chosen_model = 'models/gemini-1.5-pro'
-        elif 'models/gemini-1.5-flash' in models: chosen_model = 'models/gemini-1.5-flash'
-    except: pass
+        for m in genai.list_models():
+            if 'flash' in m.name: chosen_model = m.name; break
+            elif 'pro' in m.name: chosen_model = m.name
+    except: pass 
     
     model = genai.GenerativeModel(chosen_model)
     
-    # PERSONAS ATUALIZADAS (INCLUI COO)
-    personas_prompts = {
-        "Data Scientist": "Atue como Data Scientist Senior. Foco em: Análise exploratória, correlações estatísticas, limpeza de dados e deteção de anomalias (outliers).",
-        "CFO (Financeiro)": """Atue como CFO (Diretor Financeiro). Foco em: 
-                  - Rentabilidade e Margens (EBITDA, Margem Líquida).
-                  - Cash Flow e Custos.
-                  - ROI (Retorno sobre Investimento).
-                  - Identificação de desperdícios financeiros.""",
-        "CMO (Marketing)": """Atue como CMO (Diretor de Marketing). Foco em:
-                  - CAC (Custo de Aquisição) e LTV (Lifetime Value).
-                  - Performance de canais e conversão.
-                  - Segmentação de clientes e Churn.
-                  - Eficiência de campanhas.""",
-        "COO (Operacional)": """Atue como COO (Diretor de Operações). Foco em:
-                  - Eficiência Operacional e Produtividade.
-                  - Logística, Prazos de Entrega e Stocks (Inventário).
-                  - Gargalos (Bottlenecks) nos processos.
-                  - Contagem de transações, volume de trabalho e Otimização de Recursos."""
-    }
-    
-    p_txt = personas_prompts.get(persona, "Atue como Analista de Dados.")
+    p_txt = "Atue como Data Scientist Senior."
+    if persona == "CFO": p_txt = "Atue como CFO focado em eficiência financeira."
+    elif persona == "CMO": p_txt = "Atue como CMO focado em performance de marketing."
     
     # --- PROMPT 'SHERLOCK' (DETECTA ESTRUTURA) ---
     prompt = f"""
@@ -373,48 +353,85 @@ def ask_gemini(df, query, api_key, context, file_list, persona):
     ESTRUTURA (dtypes):
     {df.dtypes.to_string()}
     
+    AMOSTRA (Primeiras 5 linhas):
+    {df.head(5).to_markdown()}
+    
     PERGUNTA: "{query}"
     
     --- INSTRUÇÕES CRÍTICAS DE PYTHON ---
-    1. NÃO assuma nomes de colunas. Olhe para a 'ESTRUTURA' acima.
-    2. O dataframe chama-se variável 'df'. JÁ ESTÁ CARREGADO. NÃO use pd.read_csv().
-    3. Importe sempre: import pandas as pd; import matplotlib.pyplot as plt; import seaborn as sns; import numpy as np
-    4. SE for fazer gráficos: use plt.figure() e plt ou sns. NÃO use plt.show().
-    5. SE for resposta de texto: use print().
-    6. Limpeza: Se houver símbolos de moeda ('€', 'R$'), remova-os e converta para float antes de calcular.
-    7. Responda APENAS com código Python (dentro de ```python ... ```).
+    1. NÃO assuma nomes de colunas. Olhe para a 'AMOSTRA' acima.
+    2. SE os canais (Facebook, Instagram, etc.) forem COLUNAS:
+       - Você deve somar ou filtrar essas colunas específicas.
+       - Exemplo: total_facebook = df['facebook'].sum()
+    3. SE existir uma coluna 'parâmetro' ou 'metric':
+       - Filtre as linhas. Ex: df[df['parâmetro'] == 'Investimento']
+    4. Limpeza: Se houver símbolos de moeda ('€', 'R$'), remova-os e converta para float antes de calcular.
+    5. Responda APENAS com código Python (dentro de ```python).
+    6. NÃO use pd.read_csv(). Use 'df'.
+    7. Use print() para a resposta final e plt.figure() para gráficos.
     """
     
     try:
         response = model.generate_content(prompt)
         match = re.search(r"```python(.*?)```", response.text, re.DOTALL)
-        if match:
-            return match.group(1).strip()
-        else:
-            # Fallback para texto simples
-            clean_text = response.text.replace("```", "").strip()
-            if "print" in clean_text or "plt." in clean_text:
-                return clean_text
-            return f"print('Resposta da IA (Texto): {clean_text}')"
-            
+        return match.group(1).strip() if match else response.text.replace("```", "").strip()
     except Exception as e:
         return f"print('Erro de Raciocínio da IA: {e}')"
+        
+        # --- SISTEMA DE SEGURANÇA ANTI-ERRO ---
+        match = re.search(r"```python(.*?)```", response.text, re.DOTALL)
+        
+        if match:
+            # Se enviou código direitinho, usa o código
+            return match.group(1).strip()
+        else:
+            # SE FALHOU E MANDOU TEXTO: Transforma o texto em código Python válido
+            # Remove aspas para não dar erro de sintaxe
+            clean_text = response.text.replace('"', "'").replace("\n", " ")
+            return f"print(\"{clean_text}\")"
+            
+    except Exception as e:
+        return f"print('Erro de ligação à IA: {e}')"
+    
+    # Prompt com IMPORT OBRIGATÓRIO para corrigir erro 'pd not defined'
+    
+    prompt = f"""
+    {persona_text}
+    
+    CONTEXTO DE NEGÓCIO: {context}
+    NOMES DOS FICHEIROS CARREGADOS: {', '.join(file_list)}
+    
+    ESTRUTURA DOS DADOS (DataFrame 'df'):
+    {df.dtypes.to_string()}
+    
+    PERGUNTA DO UTILIZADOR: "{query}"
+    
+    REGRAS OBRIGATÓRIAS (CRÍTICO):
+    1. NÃO use pd.read_csv() nem pd.read_excel(). Os ficheiros NÃO estão no disco.
+    2. Os dados JÁ estão carregados na memória na variável 'df'. Use APENAS 'df'.
+    3. Comece sempre com os imports: import pandas as pd; import matplotlib.pyplot as plt; import seaborn as sns; import numpy as np
+    4. Use print() para escrever a resposta de texto.
+    5. Use plt.figure() para criar gráficos.
+    """
+    
+    # ... (o resto da função continua igual) ...
+    
+    try:
+        response = model.generate_content(prompt)
+        # Limpeza do código
+        match = re.search(r"```python(.*?)```", response.text, re.DOTALL)
+        return match.group(1).strip() if match else response.text.replace("```", "").strip()
+    except Exception as e:
+        return f"print('Erro na IA: {e}')"
 
-# EXECUTOR DE CÓDIGO (CORRIGIDO PARA LIMPAR GRÁFICOS)
 def execute_code(code, df):
     try:
-        import matplotlib.pyplot as plt
-        import seaborn as sns
-        
-        # 1. Limpar figuras anteriores para não haver sobreposição (CRUCIAL)
-        plt.clf()
-        plt.close('all') 
-        
-        # 2. Redirecionar output
+        import numpy as np
+        # Redirecionar output
         old_stdout = sys.stdout
         redirected_output = sys.stdout = StringIO()
         
-        # 3. Contexto Global com Bibliotecas
+        # Contexto Global com Bibliotecas
         local_vars = {
             'df': df,
             'pd': pd,
@@ -423,40 +440,12 @@ def execute_code(code, df):
             'np': np
         }
         
-        exec(code, {}, local_vars)
+        exec(code, local_vars)
         
         sys.stdout = old_stdout
-        text_output = redirected_output.getvalue()
-        
-        # 4. Verificar se há gráfico
-        fig = plt.gcf()
-        if not plt.gca().has_data():
-            fig = None
-            
-        return text_output, fig
+        return redirected_output.getvalue(), plt
     except Exception as e:
-        sys.stdout = sys.__stdout__
         return f"Erro na execução do código: {e}\n\nVerifique se os dados suportam a pergunta.", None
-
-# NOVA FUNÇÃO: GERADOR DE RELATÓRIOS AUTOMÁTICOS
-def generate_role_insights(df, persona, api_key, context, file_list):
-    """
-    Gera proativamente um resumo executivo baseado na função (CFO, COO, etc.)
-    """
-    # Perguntas automáticas baseadas no cargo
-    auto_queries = {
-        "CFO (Financeiro)": "Gere um resumo financeiro executivo: Calcule o Total de Receitas, Total de Custos (se houver) e Margens. Mostre a evolução temporal dos valores e top despesas.",
-        "CMO (Marketing)": "Analise a performance de marketing: Identifique os canais ou produtos mais vendidos, tendências de vendas ao longo do tempo e segmentação básica.",
-        "COO (Operacional)": "Resumo Operacional: Analise o volume total de linhas (pedidos/operações). Verifique a distribuição por datas (picos de carga), status dos pedidos e contagens por categoria.",
-        "Data Scientist": "Faça uma análise exploratória técnica: df.describe(), conte valores nulos por coluna e mostre um heatmap de correlação das variáveis numéricas."
-    }
-    
-    query = auto_queries.get(persona, "Faça um resumo geral dos dados.")
-    
-    # Reutilizamos a inteligência do ask_gemini para criar o código
-    code = ask_gemini(df, query, api_key, context, file_list, persona)
-    
-    return query, code
 
 def create_pdf(chat_data):
     pdf = FPDF()
@@ -503,7 +492,7 @@ def generate_qr_code(data):
     return buf.getvalue()
 
 def generate_whatsapp_link(text):
-    return f"[https://wa.me/?text=](https://wa.me/?text=){urllib.parse.quote(text)}"
+    return f"https://wa.me/?text={urllib.parse.quote(text)}"
 
 def generate_mailto_link(email, subject, body):
     return f"mailto:{email}?subject={urllib.parse.quote(subject)}&body={urllib.parse.quote(body)}"
@@ -545,7 +534,7 @@ def login_page():
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         # LOGO (Placeholder ou ficheiro local)
-        st.image("[https://cdn-icons-png.flaticon.com/512/8637/8637099.png](https://cdn-icons-png.flaticon.com/512/8637/8637099.png)", width=100)
+        st.image("https://cdn-icons-png.flaticon.com/512/8637/8637099.png", width=100)
         st.markdown("<h1 style='text-align: center; margin-top:-20px'>AInsight</h1>", unsafe_allow_html=True)
         st.markdown("<p style='text-align: center; opacity: 0.7'>Business Intelligence AI</p>", unsafe_allow_html=True)
         st.write("") 
@@ -573,14 +562,14 @@ def login_page():
                 oauth2 = OAuth2Component(
                     st.secrets["GOOGLE_CLIENT_ID"], 
                     st.secrets["GOOGLE_CLIENT_SECRET"], 
-                    "[https://accounts.google.com/o/oauth2/v2/auth](https://accounts.google.com/o/oauth2/v2/auth)", 
-                    "[https://oauth2.googleapis.com/token](https://oauth2.googleapis.com/token)", 
-                    "[https://www.googleapis.com/oauth2/v1/tokeninfo](https://www.googleapis.com/oauth2/v1/tokeninfo)", 
-                    "[https://www.googleapis.com/oauth2/v1/userinfo](https://www.googleapis.com/oauth2/v1/userinfo)"
+                    "https://accounts.google.com/o/oauth2/v2/auth", 
+                    "https://oauth2.googleapis.com/token", 
+                    "https://www.googleapis.com/oauth2/v1/tokeninfo", 
+                    "https://www.googleapis.com/oauth2/v1/userinfo"
                 )
                 res = oauth2.authorize_button(
                     name="Entrar com Google", 
-                    icon="[https://www.google.com.tw/favicon.ico](https://www.google.com.tw/favicon.ico)", 
+                    icon="https://www.google.com.tw/favicon.ico", 
                     redirect_uri=st.secrets["GOOGLE_REDIRECT_URI"], 
                     scope="email profile", 
                     key="google_login_btn"
@@ -616,7 +605,9 @@ def main_app():
     # --- BARRA LATERAL (SIDEBAR) ---
     with st.sidebar:
         # Logo e Info User
-        st.header("👁️ AInsight")
+        c_logo, c_txt = st.columns([1, 3])
+        with c_logo: 
+            st.image("https://cdn-icons-png.flaticon.com/512/8637/8637099.png", width=50)
         with c_txt: 
             st.markdown("### AInsight")
             st.caption(f"Logado como: {user}")
@@ -711,10 +702,9 @@ def main_app():
         else: 
             api_key = st.text_input("Insira a sua Gemini API Key", type="password")
         
-        # Configuração (ATUALIZADA COM COO)
+        # Configuração
         c1, c2 = st.columns(2)
-        persona = c1.selectbox("Persona (Quem analisa?)", 
-                               ["Data Scientist", "CFO (Financeiro)", "CMO (Marketing)", "COO (Operacional)"])
+        persona = c1.selectbox("Persona (Quem analisa?)", ["Data Scientist", "CFO (Financeiro)", "CMO (Marketing)"])
         context = c2.text_area("Contexto do Negócio", height=40, placeholder="Ex: E-commerce de moda...")
         
         # Upload
@@ -728,56 +718,37 @@ def main_app():
         if url_input: 
             url_df, url_name = load_from_url(url_input)
         
-        # Processamento Automático (ATUALIZADO COM BOTÃO AUTO)
+        # Processamento Automático
         if up_files or url_df is not None:
-            # Usar smart_merge com cache
             df, fn = smart_merge(up_files, url_df, url_name)
-            
             if df is not None:
                 st.success(f"✅ {len(fn)} Fontes de Dados Conectadas!")
                 st.session_state['temp_df'] = df
                 st.session_state['temp_files'] = fn
-                
-                # --- BOTÃO DE RELATÓRIO AUTOMÁTICO ---
-                if st.button(f"🚀 Gerar Relatório Automático de {persona}", use_container_width=True):
-                    if not api_key:
-                        st.error("Por favor configure a API Key primeiro.")
-                    else:
-                        new_id = db.create_chat(f"Relatório Auto: {persona}", workspace_id=selected_ws_id)
-                        with st.spinner(f"O {persona} está a auditar os dados..."):
-                            q_auto, code = generate_role_insights(df, persona, api_key, context, fn)
-                            text, fig = execute_code(code, df)
-                            
-                            chat_data = db.get_chat(new_id)
-                            chat_data["messages"].append({"role": "user", "content": q_auto})
-                            chat_data["messages"].append({"role": "assistant", "content": text})
-                            db.update_chat(new_id, chat_data)
-                            
-                            st.session_state['current_chat_id'] = new_id
-                            st.rerun()
-                # ----------------------------------------
-                
                 with st.expander("Visualizar Dados"):
                     st.dataframe(df.head())
         
-        # Caixa de Pergunta Inicial (MANUAL)
-        if st.session_state.get('temp_df') is not None:
-            if query := st.chat_input(f"Ou faça uma pergunta específica ao {persona}..."):
-                if not api_key:
-                    st.error("Configure a API Key.")
-                else:
-                    new_id = db.create_chat(query, workspace_id=selected_ws_id)
-                    with st.spinner(f"O {persona} está a analisar..."):
-                        code = ask_gemini(st.session_state['temp_df'], query, api_key, context, st.session_state['temp_files'], persona)
-                        text, fig = execute_code(code, st.session_state['temp_df'])
-                        
-                        chat_data = db.get_chat(new_id)
-                        chat_data["messages"].append({"role": "user", "content": query})
-                        chat_data["messages"].append({"role": "assistant", "content": text})
-                        db.update_chat(new_id, chat_data)
-                        
-                        st.session_state['current_chat_id'] = new_id
-                        st.rerun()
+        # Caixa de Pergunta Inicial
+        if query := st.chat_input("O que gostaria de saber sobre estes dados?"):
+            if not api_key or st.session_state['temp_df'] is None:
+                st.error("Por favor configure a API Key e carregue Dados primeiro.")
+            else:
+                # Criar Chat e Redirecionar
+                new_id = db.create_chat(query, workspace_id=selected_ws_id)
+                
+                with st.spinner(f"O {persona} está a analisar..."):
+                    code = ask_gemini(st.session_state['temp_df'], query, api_key, context, st.session_state['temp_files'], persona)
+                    text, fig = execute_code(code, st.session_state['temp_df'])
+                    
+                    # Salvar mensagens
+                    chat_data = db.get_chat(new_id)
+                    chat_data["messages"].append({"role": "user", "content": query})
+                    chat_data["messages"].append({"role": "assistant", "content": text})
+                    db.update_chat(new_id, chat_data)
+                    
+                    # Entrar no chat
+                    st.session_state['current_chat_id'] = new_id
+                    st.rerun()
 
     # CENÁRIO 2: DENTRO DE UMA ANÁLISE
     else:
