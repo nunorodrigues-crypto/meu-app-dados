@@ -333,54 +333,58 @@ def smart_merge(files=None, url_df=None, url_name=None):
     dataframes = []
     file_names = []
     
-    # Processar Uploads
+    # 1. Processar Uploads de Ficheiros
     if files:
         for f in files:
             try:
-                if f.name.endswith('.csv'): df = pd.read_csv(f)
-                else: df = pd.read_excel(f)
+                # Ler o ficheiro
+                if f.name.endswith('.csv'): 
+                    df = pd.read_csv(f)
+                else: 
+                    df = pd.read_excel(f)
                 
-                # Chama a função de limpeza melhorada
+                # --- A CORREÇÃO ESTÁ AQUI EM BAIXO ---
+                # Temos de separar o resultado em 2 variáveis (Tabela, Data)
                 clean_df, has_date = clean_individual_df(df, f.name)
                 
                 if has_date:
                     prefix = f.name.split('.')[0]
-                    # Renomear colunas (exceto a Data) para evitar conflitos
                     clean_df.columns = [f"{prefix}_{c}" if c != 'DATA_FUSAO' else 'DATA_FUSAO' for c in clean_df.columns]
                     dataframes.append(clean_df)
                     file_names.append(f.name)
                 else:
-                    # Se não tem data, adiciona como está (para análise isolada)
                     dataframes.append(clean_df)
                     file_names.append(f.name)
-            except: pass
+            except Exception as e:
+                # Se falhar a ler um ficheiro específico, ignora e continua
+                print(f"Erro a ler {f.name}: {e}")
 
-    # Processar Link
+    # 2. Processar Link Cloud
     if url_df is not None:
-        clean_df, has_date = clean_individual_df(url_df, url_name)
-        if has_date:
-            clean_df.columns = [f"CLOUD_{c}" if c != 'DATA_FUSAO' else 'DATA_FUSAO' for c in clean_df.columns]
+        try:
+            clean_df, has_date = clean_individual_df(url_df, url_name)
+            if has_date:
+                clean_df.columns = [f"CLOUD_{c}" if c != 'DATA_FUSAO' else 'DATA_FUSAO' for c in clean_df.columns]
             dataframes.append(clean_df)
             file_names.append(url_name)
-        else:
-            dataframes.append(clean_df)
-            file_names.append(url_name)
+        except: pass
 
+    # 3. Verificações Finais
     if not dataframes:
         return None, "Sem dados válidos."
 
     try:
+        # Se só houver 1 ficheiro, devolve logo a tabela limpa
         if len(dataframes) == 1:
             return dataframes[0], file_names
         
-        # Verifica se todos têm data para fazer fusão temporal
+        # Se houver vários, tenta fundir
         all_have_date = all(['DATA_FUSAO' in df.columns for df in dataframes])
         
         if all_have_date:
             df_final = reduce(lambda l,r: pd.merge(l, r, on='DATA_FUSAO', how='outer'), dataframes)
             return df_final.sort_values('DATA_FUSAO').fillna(0), file_names
         else:
-            # Fusão horizontal simples se não houver datas compatíveis
             df_final = pd.concat([d.reset_index(drop=True) for d in dataframes], axis=1)
             return df_final.fillna(0), file_names
 
