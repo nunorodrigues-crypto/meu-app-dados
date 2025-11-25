@@ -385,7 +385,7 @@ def smart_merge(files=None, url_df=None, url_name=None):
             return df_final.fillna(0), file_names
 
     except Exception as e:
-        return None, f"Erro na fusão: {e}
+        return None, f"Erro na fusão: {e}"
 
 # --- 4. CÉREBRO DE IA (GEMINI) ---
 def ask_gemini(df, query, api_key, context, file_list, persona):
