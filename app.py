@@ -804,40 +804,72 @@ def main_app():
         if url_input: 
             url_df, url_name = load_from_url(url_input)
         
-        # Processamento Automático
+# Processamento Automático
         if up_files or url_df is not None:
-            df, fn = smart_merge(up_files, url_df, url_name)
-            if df is not None:
-                st.success(f"✅ {len(fn)} Fontes de Dados Conectadas!")
-                st.session_state['temp_df'] = df
-                st.session_state['temp_files'] = fn
+            # 1. Tenta fundir os ficheiros (Chamada única!)
+            result = smart_merge(up_files, url_df, url_name)
             
-            # --- NOVO: BOTÃO RELATÓRIO AUTOMÁTICO ---
-            if up_files or url_df is not None:
-                df, fn = smart_merge(up_files, url_df, url_name)
-            
-            # --- AQUI COMEÇA O BLOCO QUE DEU ERRO ---
-            if df is not None:
-                st.success(f"✅ {len(fn)} Fontes de Dados Conectadas!")
-                st.session_state['temp_df'] = df
-                st.session_state['temp_files'] = fn
+            # 2. Garante que o resultado é válido antes de avançar
+            if result is None:
+                 st.error("Erro desconhecido no processamento dos ficheiros.")
+            else:
+                df, fn = result
+
+                # 3. VERIFICAÇÃO DE SEGURANÇA: Só avança se df for uma Tabela real (DataFrame)
+                # Isto impede o erro 'AttributeError' que estavas a ter
+                if df is not None and isinstance(df, pd.DataFrame):
+                    st.success(f"✅ {len(fn)} Fontes de Dados Conectadas!")
+                    st.session_state['temp_df'] = df
+                    st.session_state['temp_files'] = fn
+                    
+                    # --- BOTÃO RELATÓRIO AUTOMÁTICO ---
+                    if st.button(f"🚀 Relatório Automático ({persona})", use_container_width=True):
+                        if not api_key:
+                            st.error("Falta API Key")
+                        else:
+                            new_id = db.create_chat(f"Relatório Auto: {persona}", workspace_id=selected_ws_id)
+                            with st.spinner("A gerar relatório..."):
+                                q, code = generate_role_insights(df, persona, api_key, context, fn)
+                                txt, fig = execute_code(code, df)
+                                
+                                c_data = db.get_chat(new_id)
+                                c_data["messages"].extend([{"role": "user", "content": q}, {"role": "assistant", "content": txt}])
+                                db.update_chat(new_id, c_data)
+                                
+                                st.session_state['current_chat_id'] = new_id
+                                st.rerun()
+                    # ----------------------------------------
+
+                    # Visualizar Dados (Só aparece se a tabela for válida)
+                    with st.expander("Visualizar Dados"):
+                        st.dataframe(df.head())
                 
-                # --- BOTÃO RELATÓRIO AUTOMÁTICO ---
-                if st.button(f"🚀 Relatório Automático ({persona})", use_container_width=True):
-                    if not api_key:
-                        st.error("Falta API Key")
-                    else:
-                        new_id = db.create_chat(f"Relatório Auto: {persona}", workspace_id=selected_ws_id)
-                        with st.spinner("A gerar relatório..."):
-                            q, code = generate_role_insights(df, persona, api_key, context, fn)
-                            txt, fig = execute_code(code, df)
-                            
-                            c_data = db.get_chat(new_id)
-                            c_data["messages"].extend([{"role": "user", "content": q}, {"role": "assistant", "content": txt}])
-                            db.update_chat(new_id, c_data)
-                            
-                            st.session_state['current_chat_id'] = new_id
-                            st.rerun()
+                # Se o df não for uma tabela (ex: erro na leitura), mostra o erro
+                else:
+                    st.error(f"Não foi possível ler os dados. Detalhe: {fn}")
+        
+        # Caixa de Pergunta Inicial (Manual) - Só aparece se já houver dados carregados
+        if st.session_state.get('temp_df') is not None:
+            if query := st.chat_input("O que gostaria de saber sobre estes dados?"):
+                if not api_key:
+                    st.error("Por favor configure a API Key primeiro.")
+                else:
+                    # Criar Chat e Redirecionar
+                    new_id = db.create_chat(query, workspace_id=selected_ws_id)
+                    
+                    with st.spinner(f"O {persona} está a analisar..."):
+                        code = ask_gemini(st.session_state['temp_df'], query, api_key, context, st.session_state['temp_files'], persona)
+                        text, fig = execute_code(code, st.session_state['temp_df'])
+                        
+                        # Salvar mensagens
+                        chat_data = db.get_chat(new_id)
+                        chat_data["messages"].append({"role": "user", "content": query})
+                        chat_data["messages"].append({"role": "assistant", "content": text})
+                        db.update_chat(new_id, chat_data)
+                        
+                        # Entrar no chat
+                        st.session_state['current_chat_id'] = new_id
+                        st.rerun()
                 # ----------------------------------------
 
                 with st.expander("Visualizar Dados"):
