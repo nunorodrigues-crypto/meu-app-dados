@@ -902,9 +902,96 @@ def render_dashboard(db, user, persona, api_key, selected_ws_id):
             del self.user_data["tasks"][task_id]
             self.save_db()
 
+    # --- GESTÃO DE DOCUMENTOS (NOTION STYLE) ---
+    def create_doc(self, title, content="# Novo Documento"):
+        doc_id = str(uuid.uuid4())
+        if "docs" not in self.user_data: self.user_data["docs"] = {}
+        
+        self.user_data["docs"][doc_id] = {
+            "title": title,
+            "content": content,
+            "updated_at": datetime.now().isoformat()
+        }
+        self.save_db()
+        return doc_id
+
+    def update_doc(self, doc_id, new_content):
+        if "docs" in self.user_data and doc_id in self.user_data["docs"]:
+            self.user_data["docs"][doc_id]["content"] = new_content
+            self.user_data["docs"][doc_id]["updated_at"] = datetime.now().isoformat()
+            self.save_db()
+    
+    def delete_doc(self, doc_id):
+        if "docs" in self.user_data and doc_id in self.user_data["docs"]:
+            del self.user_data["docs"][doc_id]
+            self.save_db()        
+
 def render_docs_page(db):
-    st.title("🧠 Documentação")
-    st.info("🚧 Módulo em construção: Aqui ficarão os Wikis e Relatórios (Notion Style).")
+    st.title("🧠 Base de Conhecimento (Docs)")
+
+    # Garante que a gaveta existe
+    if "docs" not in db.user_data: db.user_data["docs"] = {}
+    docs = db.user_data["docs"]
+
+    # Layout: Sidebar de Docs (Esquerda) | Editor (Direita)
+    col_list, col_editor = st.columns([1, 3])
+
+    with col_list:
+        st.subheader("Meus Docs")
+        
+        # Criar Novo Doc
+        with st.popover("➕ Novo Doc"):
+            new_title = st.text_input("Título do Documento")
+            if st.button("Criar Página"):
+                if new_title:
+                    new_id = db.create_doc(new_title)
+                    st.session_state['selected_doc_id'] = new_id
+                    st.rerun()
+
+        st.markdown("---")
+        
+        # Lista de Docs existentes
+        for doc_id, doc in docs.items():
+            # Botão para selecionar o documento
+            if st.button(f"📄 {doc['title']}", key=doc_id, use_container_width=True):
+                st.session_state['selected_doc_id'] = doc_id
+                st.rerun()
+
+    with col_editor:
+        selected_id = st.session_state.get('selected_doc_id')
+        
+        # Se houver um documento selecionado, mostra o editor
+        if selected_id and selected_id in docs:
+            doc = docs[selected_id]
+            st.header(doc['title'])
+            st.caption(f"Última edição: {doc['updated_at'][:16]}")
+            
+            # O Editor de Texto (TextArea grande)
+            new_content = st.text_area(
+                "Conteúdo (Markdown suportado)", 
+                value=doc['content'], 
+                height=600,
+                key=f"editor_{selected_id}"
+            )
+            
+            # Auto-Save (grava quando mudas o foco ou clicas Ctrl+Enter)
+            if new_content != doc['content']:
+                db.update_doc(selected_id, new_content)
+                st.toast("Documento salvo!")
+            
+            st.markdown("---")
+            c1, c2 = st.columns([1, 5])
+            if c1.button("🗑️ Apagar Doc", type="primary"):
+                db.delete_doc(selected_id)
+                st.session_state['selected_doc_id'] = None
+                st.rerun()
+                
+            # Preview do Markdown (Como vai ficar bonito)
+            with st.expander("👁️ Ver Preview Final"):
+                st.markdown(doc['content'])
+        
+        else:
+            st.info("👈 Seleciona ou cria um documento no menu à esquerda.")
 
 def render_data_hub_page(db):
     st.title("🧬 Data Hub")
