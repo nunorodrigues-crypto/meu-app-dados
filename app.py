@@ -283,6 +283,32 @@ class HistoryManager:
             del self.user_data["tasks"][task_id]
             self.save_db()
 
+    # --- GESTÃO DE DOCUMENTOS (NOTION STYLE) ---
+    def create_doc(self, title, content="# Novo Documento"):
+        doc_id = str(uuid.uuid4())
+        # Garante que a gaveta existe
+        if "docs" not in self.user_data:
+            self.user_data["docs"] = {}
+        
+        self.user_data["docs"][doc_id] = {
+            "title": title,
+            "content": content,
+            "updated_at": datetime.now().isoformat()
+        }
+        self.save_db()
+        return doc_id
+
+    def update_doc(self, doc_id, new_content):
+        if "docs" in self.user_data and doc_id in self.user_data["docs"]:
+            self.user_data["docs"][doc_id]["content"] = new_content
+            self.user_data["docs"][doc_id]["updated_at"] = datetime.now().isoformat()
+            self.save_db()
+    
+    def delete_doc(self, doc_id):
+        if "docs" in self.user_data and doc_id in self.user_data["docs"]:
+            del self.user_data["docs"][doc_id]
+            self.save_db()
+
 # --- 3. FUNÇÕES DE PROCESSAMENTO DE DADOS ---
 def convert_currency_to_float(val):
     """
