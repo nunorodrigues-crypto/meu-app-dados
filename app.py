@@ -964,6 +964,10 @@ def render_tasks_page(db):
         # O Titulo é agora um Expander para ver detalhes
         emoji_prio = "🔥" if t['priority'] == 'Alta' else "▪️"
         
+        # Gera um sufixo único baseado no tipo de coluna para evitar conflitos de keys
+        # Ex: Se a tarefa estiver no "todo", a key será "start_ID_todo"
+        unique_suffix = f"{tid}_{col_type}"
+
         with st.expander(f"{emoji_prio} {t['title']}", expanded=True):
             # Conteúdo Oculto (Descrição e Dono)
             if t.get('description'):
@@ -979,20 +983,24 @@ def render_tasks_page(db):
             c_btns = st.columns(2)
             
             if col_type == "todo":
-                if st.button("➡️ Iniciar", key=f"start_{tid}", use_container_width=True):
+                # Adicionei o sufixo _todo à key
+                if st.button("➡️ Iniciar", key=f"start_{unique_suffix}", use_container_width=True):
                     db.move_task(tid, "Doing"); st.rerun()
             
             elif col_type == "doing":
-                if c_btns[0].button("⬅️", key=f"back_{tid}", use_container_width=True):
+                # Adicionei sufixos _back e _done
+                if c_btns[0].button("⬅️", key=f"back_{unique_suffix}", use_container_width=True):
                     db.move_task(tid, "To Do"); st.rerun()
-                if c_btns[1].button("✅", key=f"done_{tid}", use_container_width=True):
+                if c_btns[1].button("✅", key=f"done_{unique_suffix}", use_container_width=True):
                     db.move_task(tid, "Done"); st.rerun()
             
             elif col_type == "done":
-                if st.button("♻️ Reabrir", key=f"reopen_{tid}", use_container_width=True):
+                # Adicionei sufixo _reopen
+                if st.button("♻️ Reabrir", key=f"reopen_{unique_suffix}", use_container_width=True):
                     db.move_task(tid, "To Do"); st.rerun()
             
-            if st.button("🗑️ Apagar", key=f"del_{tid}", use_container_width=True):
+            # Botão de apagar (sempre presente)
+            if st.button("🗑️ Apagar", key=f"del_{unique_suffix}", use_container_width=True):
                 db.delete_task(tid); st.rerun()
 
     # 3. Desenhar Colunas
