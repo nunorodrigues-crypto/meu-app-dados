@@ -698,225 +698,81 @@ def login_page():
                 else:
                     st.error("Código inválido ou já usado.")
 
-def main_app():
-    user = st.session_state.get('username', 'User')
-    is_guest = st.session_state.get('is_guest', False)
-    db = HistoryManager(user)
-
-    # --- BARRA LATERAL (SIDEBAR) ---
-    with st.sidebar:
-        # Logo e Info User
-        c_logo, c_txt = st.columns([1, 3])
-        with c_logo: 
-            st.image("https://cdn-icons-png.flaticon.com/512/8637/8637099.png", width=50)
-        with c_txt: 
-            st.markdown("### AInsight")
-            st.caption(f"Logado como: {user}")
-
-        # Área Admin: Gerar Convites
-        if not is_guest:
-            with st.expander("🎟️ Gerar Convite", expanded=False):
-                if st.button("Criar Novo Código", key="gen_token_btn"):
-                    tk = db.create_one_time_token()
-                    base_url = st.secrets.get("APP_URL", "#")
-                    magic_link = f"{base_url}?token={tk}"
-                    
-                    st.success(f"Código: {tk}")
-                    st.image(generate_qr_code(magic_link), width=150, caption="QR de Acesso")
-                    
-                    wa_msg = f"Olá! Acede à AInsight aqui: {magic_link} \nOu usa o código: *{tk}*"
-                    wa_url = generate_whatsapp_link(wa_msg)
-                    st.markdown(f"[📲 Enviar WhatsApp]({wa_url})")
-
-        st.markdown("---")
-        
-        # Seletor de Modo (Pessoal vs Empresa)
-        context_mode = st.radio("Modo:", ["Pessoal", "Workspaces"], horizontal=True)
-        selected_ws_id = None
-        
-        if context_mode == "Workspaces":
-            if db.user_data["plan"] != "pro":
-                st.info("Funcionalidade PRO")
-                if st.button("💎 Upgrade"): 
-                    db.upgrade_plan()
-                    st.rerun()
-            else:
-                # Listar Workspaces
-                my_ws = {k:v for k,v in db.full_db["workspaces"].items() if user in v["members"]}
-                if my_ws:
-                    selected_ws_id = st.selectbox("Empresa", list(my_ws.keys()), format_func=lambda x: my_ws[x]["name"])
-                
-                # Criar Workspace
-                with st.popover("🏢 Nova Empresa"):
-                    n = st.text_input("Nome")
-                    if st.button("Criar"): 
-                        db.create_workspace(n)
-                        st.rerun()
-
-        st.markdown("---")
-        
-        # Botão Nova Análise
-        if st.button("➕ Nova Análise", use_container_width=True, key="new_chat_btn"):
-            st.session_state['current_chat_id'] = None
-            st.rerun()
-        
-        # Lista de Chats
-        chats_source = db.user_chats
-        if context_mode == "Workspaces" and selected_ws_id:
-             chats_source = db.full_db["workspaces"][selected_ws_id]["chats"]
-
-        st.caption("HISTÓRICO")
-        for cid, d in sorted(chats_source.items(), key=lambda x:x[1]['created_at'], reverse=True):
-            c1, c2 = st.columns([1, 5])
-            with c1: 
-                if st.button("🗑️", key=f"del_{cid}"): 
-                    db.delete_chat(cid)
-                    if st.session_state.get('current_chat_id') == cid: 
-                        st.session_state['current_chat_id'] = None
-                    st.rerun()
-            with c2:
-                if st.button(f"💬 {d['title']}", key=cid): 
-                    st.session_state['current_chat_id'] = cid
-                    st.rerun()
-        
-        st.markdown("---")
-        if st.button("🚪 Sair", key="logout_btn"): 
-            st.session_state['authenticated'] = False
-            st.query_params.clear()
-            st.rerun()
-
-    # --- ÁREA CENTRAL (MAIN) ---
-    current_id = st.session_state.get('current_chat_id')
-    
-    # Inicializar variáveis de sessão
+def render_dashboard(db, user, persona, api_key, selected_ws_id):
+    """
+    ANTIGO CÉREBRO: Contém toda a lógica de Chat, Upload e Gráficos.
+    """
+    # 1. Inicialização de Variáveis de Sessão
     if 'temp_df' not in st.session_state: st.session_state['temp_df'] = None
     if 'temp_files' not in st.session_state: st.session_state['temp_files'] = []
+    
+    current_id = st.session_state.get('current_chat_id')
 
     # CENÁRIO 1: CONFIGURAÇÃO DE NOVA ANÁLISE
     if current_id is None:
-        st.title("✨ Nova Análise")
-        st.markdown("Carregue os seus dados para começar a explorar.")
-        
-        # Input de API Key (se não estiver nos segredos)
-        if "GEMINI_API_KEY" in st.secrets: 
-            api_key = st.secrets["GEMINI_API_KEY"]
-        else: 
-            api_key = st.text_input("Insira a sua Gemini API Key", type="password")
-        
-        # Configuração
-        c1, c2 = st.columns(2)
-        persona = c1.selectbox("Persona (Quem analisa?)", ["Data Scientist", "CFO (Financeiro)", "CMO (Marketing)", "COO (Operacional)"])
-        context = c2.text_area("Contexto do Negócio", height=40, placeholder="Ex: E-commerce de moda...")
+        st.title(f"📊 Análise IA ({persona})")
+        context = st.text_area("Contexto do Negócio", height=70, placeholder="Ex: Varejo de Moda...")
         
         # Upload
         t1, t2 = st.tabs(["📂 Upload Ficheiros", "🔗 Link Cloud"])
-        
-        up_files = t1.file_uploader("Arraste ficheiros (Excel/CSV)", accept_multiple_files=True)
-        
-        url_df = None
-        url_name = None
+        up_files = t1.file_uploader("Ficheiros", accept_multiple_files=True)
         url_input = t2.text_input("Link do Google Sheets (Público)")
-        if url_input: 
-            url_df, url_name = load_from_url(url_input)
         
-# Processamento Automático
+        # Lógica de Upload
+        url_df, url_name = None, None
+        if url_input: url_df, url_name = load_from_url(url_input)
+
+        # 1. INICIALIZAÇÃO DE SEGURANÇA
+        df = None
+        fn = []
+
+        # 2. Processamento Automático
         if up_files or url_df is not None:
-            # 1. Tenta fundir os ficheiros (Chamada única!)
             result = smart_merge(up_files, url_df, url_name)
             
-            # 2. Garante que o resultado é válido antes de avançar
             if result is None:
-                 st.error("Erro desconhecido no processamento dos ficheiros.")
+                st.error("Erro ao processar ficheiros.")
             else:
                 df, fn = result
-
-                # 3. VERIFICAÇÃO DE SEGURANÇA: Só avança se df for uma Tabela real (DataFrame)
-                # Isto impede o erro 'AttributeError' que estavas a ter
                 if df is not None and isinstance(df, pd.DataFrame):
                     st.success(f"✅ {len(fn)} Fontes de Dados Conectadas!")
                     st.session_state['temp_df'] = df
                     st.session_state['temp_files'] = fn
                     
-                    # --- BOTÃO RELATÓRIO AUTOMÁTICO ---
+                    # BOTÃO RELATÓRIO AUTOMÁTICO
                     if st.button(f"🚀 Relatório Automático ({persona})", use_container_width=True):
-                        if not api_key:
-                            st.error("Falta API Key")
+                        if not api_key: st.error("Falta API Key")
                         else:
                             new_id = db.create_chat(f"Relatório Auto: {persona}", workspace_id=selected_ws_id)
                             with st.spinner("A gerar relatório..."):
                                 q, code = generate_role_insights(df, persona, api_key, context, fn)
                                 txt, fig = execute_code(code, df)
-                                
                                 c_data = db.get_chat(new_id)
                                 c_data["messages"].extend([{"role": "user", "content": q}, {"role": "assistant", "content": txt}])
                                 db.update_chat(new_id, c_data)
-                                
                                 st.session_state['current_chat_id'] = new_id
                                 st.rerun()
-                    # ----------------------------------------
 
-                    # Visualizar Dados (Só aparece se a tabela for válida)
-                    with st.expander("Visualizar Dados"):
-                        st.dataframe(df.head())
-                
-                # Se o df não for uma tabela (ex: erro na leitura), mostra o erro
+                    with st.expander("Visualizar Dados"): st.dataframe(df.head())
                 else:
-                    st.error(f"Não foi possível ler os dados. Detalhe: {fn}")
-        
-        # Caixa de Pergunta Inicial (Manual) - Só aparece se já houver dados carregados
+                    st.warning("Ficheiro carregado mas sem dados legíveis.")
+
+        # Caixa de Pergunta Manual
         if st.session_state.get('temp_df') is not None:
-            if query := st.chat_input("O que gostaria de saber sobre estes dados?"):
-                if not api_key:
-                    st.error("Por favor configure a API Key primeiro.")
+            if query := st.chat_input("O que gostaria de saber?"):
+                if not api_key: st.error("Falta API Key")
                 else:
-                    # Criar Chat e Redirecionar
                     new_id = db.create_chat(query, workspace_id=selected_ws_id)
-                    
                     with st.spinner(f"O {persona} está a analisar..."):
                         code = ask_gemini(st.session_state['temp_df'], query, api_key, context, st.session_state['temp_files'], persona)
                         text, fig = execute_code(code, st.session_state['temp_df'])
-                        
-                        # Salvar mensagens
-                        chat_data = db.get_chat(new_id)
-                        chat_data["messages"].append({"role": "user", "content": query})
-                        chat_data["messages"].append({"role": "assistant", "content": text})
-                        db.update_chat(new_id, chat_data)
-                        
-                        # Entrar no chat
+                        c_data = db.get_chat(new_id)
+                        c_data["messages"].extend([{"role": "user", "content": query}, {"role": "assistant", "content": text}])
+                        db.update_chat(new_id, c_data)
                         st.session_state['current_chat_id'] = new_id
                         st.rerun()
-                # ----------------------------------------
 
-                with st.expander("Visualizar Dados"):
-                    st.dataframe(df.head())
-            # ----------------------------------------
-
-            with st.expander("Visualizar Dados"):
-                st.dataframe(df.head())
-        
-        # Caixa de Pergunta Inicial
-        if query := st.chat_input("O que gostaria de saber sobre estes dados?"):
-            if not api_key or st.session_state['temp_df'] is None:
-                st.error("Por favor configure a API Key e carregue Dados primeiro.")
-            else:
-                # Criar Chat e Redirecionar
-                new_id = db.create_chat(query, workspace_id=selected_ws_id)
-                
-                with st.spinner(f"O {persona} está a analisar..."):
-                    code = ask_gemini(st.session_state['temp_df'], query, api_key, context, st.session_state['temp_files'], persona)
-                    text, fig = execute_code(code, st.session_state['temp_df'])
-                    
-                    # Salvar mensagens
-                    chat_data = db.get_chat(new_id)
-                    chat_data["messages"].append({"role": "user", "content": query})
-                    chat_data["messages"].append({"role": "assistant", "content": text})
-                    db.update_chat(new_id, chat_data)
-                    
-                    # Entrar no chat
-                    st.session_state['current_chat_id'] = new_id
-                    st.rerun()
-
-    # CENÁRIO 2: DENTRO DE UMA ANÁLISE
+    # CENÁRIO 2: DENTRO DE UMA ANÁLISE (CHAT ABERTO)
     else:
         chat_data = db.get_chat(current_id)
         if not chat_data:
@@ -924,70 +780,117 @@ def main_app():
             st.session_state['current_chat_id'] = None
             st.rerun()
         
-        # Cabeçalho e Partilha
+        # Cabeçalho
         c1, c2 = st.columns([3, 1])
-        with c1: 
-            st.subheader(f"📂 {chat_data['title']}")
-        with c2:
-            with st.popover("📤 Partilhar"):
-                em = st.text_input("Email do Colega")
-                if st.button("Dar Acesso"):
-                    if db.share_chat(current_id, em):
-                        st.success("Partilhado!")
-                        link = st.secrets.get("APP_URL", "#")
-                        subject = f"Convite AInsight: {chat_data['title']}"
-                        body = f"Olá, partilhei uma análise contigo. Acede aqui: {link}"
-                        st.markdown(f"[📧 Enviar Email]({generate_mailto_link(em, subject, body)})")
-                    else:
-                        st.error("Erro ou já partilhado.")
+        c1.subheader(f"📂 {chat_data['title']}")
+        with c2.popover("📤 Partilhar"):
+            em = st.text_input("Email")
+            if st.button("Convidar"): 
+                if db.share_chat(current_id, em): st.success("Partilhado!")
 
-        # Layout Dividido: Chat vs Notas
+        # Chat vs Notas
         col_chat, col_notes = st.columns([2, 1])
-        
         with col_notes:
-            st.markdown("### 📝 Notas")
-            notes = st.text_area("Bloco de Notas", value=chat_data.get("notes", ""), height=500, key="notes_area")
+            notes = st.text_area("📝 Notas", value=chat_data.get("notes", ""), height=400)
             if notes != chat_data.get("notes", ""):
-                chat_data["notes"] = notes
-                db.update_chat(current_id, chat_data)
-                st.toast("Notas salvas.")
+                chat_data["notes"] = notes; db.update_chat(current_id, chat_data)
         
         with col_chat:
-            # Renderizar mensagens anteriores
-            for msg in chat_data.get("messages", []):
-                st.chat_message(msg["role"]).write(msg["content"])
+            for msg in chat_data.get("messages", []): st.chat_message(msg["role"]).write(msg["content"])
             
-            # Input de Nova Pergunta
-            if query := st.chat_input("Continuar a análise..."):
-                # Verificar se temos dados em memória
-                df = st.session_state.get('temp_df')
-                
-                if df is None:
-                    st.warning("⚠️ Sessão expirou. Por favor recarregue os dados na 'Nova Análise'.")
+            if query := st.chat_input("Continuar..."):
+                if st.session_state.get('temp_df') is None: st.warning("Recarregue os dados.")
                 else:
                     st.chat_message("user").write(query)
                     chat_data["messages"].append({"role": "user", "content": query})
-                    
-                    with st.spinner("A pensar..."):
-                        # Usa contexto salvo ou padrão
-                        ctx = context if 'context' in locals() else ""
-                        prs = persona if 'persona' in locals() else "Data Scientist"
-                        
-                        code = ask_gemini(df, query, st.secrets["GEMINI_API_KEY"], ctx, st.session_state['temp_files'], prs)
-                        text, fig = execute_code(code, df)
-                        
+                    with st.spinner("Pensando..."):
+                        code = ask_gemini(st.session_state['temp_df'], query, api_key, "", st.session_state['temp_files'], persona)
+                        text, fig = execute_code(code, st.session_state['temp_df'])
                         st.chat_message("assistant").write(text)
                         if fig: st.chat_message("assistant").pyplot(fig)
-                        
                         chat_data["messages"].append({"role": "assistant", "content": text})
                         db.update_chat(current_id, chat_data)
             
-            # Botão PDF (só aparece se houver mensagens)
             if chat_data.get("messages"):
                 st.markdown("---")
-                pdf_bytes = create_pdf(chat_data)
-                st.download_button("📄 Baixar Relatório PDF", pdf_bytes, "relatorio_ainsight.pdf", "application/pdf", key="btn_pdf")
+                st.download_button("Baixar PDF", create_pdf(chat_data), "report.pdf")
 
+
+# --- PLACEHOLDERS PARA AS NOVAS FEATURES ---
+def render_tasks_page(db):
+    st.title("🔨 Gestão de Tarefas")
+    st.info("🚧 Módulo em construção: Aqui ficará o quadro Kanban (Monday Style).")
+
+def render_docs_page(db):
+    st.title("🧠 Documentação")
+    st.info("🚧 Módulo em construção: Aqui ficarão os Wikis e Relatórios (Notion Style).")
+
+def render_data_hub_page(db):
+    st.title("🧬 Data Hub")
+    st.info("🚧 Módulo em construção: Aqui ficará o versionamento de dados (GitHub Style).")
+
+
+# --- O NOVO CONTROLADOR PRINCIPAL ---
+def main_app():
+    user = st.session_state.get('username', 'User')
+    is_guest = st.session_state.get('is_guest', False)
+    db = HistoryManager(user)
+
+    # 1. SIDEBAR DE NAVEGAÇÃO (AInsight OS)
+    with st.sidebar:
+        st.header("👁️ AInsight OS")
+        st.caption(f"User: {user}")
+        
+        # O MENU PRINCIPAL
+        page = st.radio("Navegação", ["📊 Análise IA", "🧬 Data Hub", "🔨 Tarefas", "🧠 Docs"])
+        
+        st.markdown("---")
+        
+        # CONFIGURAÇÕES ESPECÍFICAS DA ANÁLISE
+        # Só mostramos Personas e Workspaces se estivermos na aba de Análise
+        selected_ws_id = None
+        persona = "Data Scientist" # Default
+        
+        if page == "📊 Análise IA":
+            context_mode = st.radio("Contexto:", ["Pessoal", "Workspaces"], horizontal=True)
+            if context_mode == "Workspaces":
+                if db.user_data["plan"] != "pro":
+                    if st.button("💎 Upgrade Pro"): db.upgrade_plan(); st.rerun()
+                else:
+                    my_ws = {k:v for k,v in db.full_db["workspaces"].items() if user in v["members"]}
+                    if my_ws: selected_ws_id = st.selectbox("Workspace", list(my_ws.keys()), format_func=lambda x: my_ws[x]["name"])
+                    with st.popover("Novo Workspace"):
+                        n = st.text_input("Nome")
+                        if st.button("Criar"): db.create_workspace(n); st.rerun()
+            
+            st.markdown("---")
+            persona = st.selectbox("Persona", ["Data Scientist", "CFO (Financeiro)", "CMO (Marketing)", "COO (Operacional)"])
+            
+            if st.button("➕ Nova Análise", use_container_width=True):
+                st.session_state['current_chat_id'] = None; st.rerun()
+            
+            # Histórico Rápido na Sidebar
+            chats_source = db.user_chats if not selected_ws_id else db.full_db["workspaces"][selected_ws_id]["chats"]
+            with st.expander("Histórico Recente"):
+                for cid, d in sorted(chats_source.items(), key=lambda x:x[1]['created_at'], reverse=True)[:5]:
+                    if st.button(f"💬 {d['title'][:20]}...", key=cid): st.session_state['current_chat_id'] = cid; st.rerun()
+
+        st.markdown("---")
+        if st.button("🚪 Sair"): 
+            st.session_state['authenticated'] = False
+            st.rerun()
+
+    # 2. ROUTER - ESCOLHE O QUE MOSTRAR NO ECRÃ
+    api_key = st.secrets.get("GEMINI_API_KEY") or st.text_input("API Key (se não configurada)", type="password")
+    
+    if page == "📊 Análise IA":
+        render_dashboard(db, user, persona, api_key, selected_ws_id)
+    elif page == "🧬 Data Hub":
+        render_data_hub_page(db)
+    elif page == "🔨 Tarefas":
+        render_tasks_page(db)
+    elif page == "🧠 Docs":
+        render_docs_page(db)
 if __name__ == "__main__":
     if "authenticated" not in st.session_state: 
         st.session_state["authenticated"] = False
