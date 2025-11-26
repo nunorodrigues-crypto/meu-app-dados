@@ -255,6 +255,29 @@ class HistoryManager:
                 return True
         return False
 
+# --- GESTÃO DE TAREFAS (MONDAY STYLE) ---
+def create_task(self, title, description="", priority="Média", due_date=None):
+        task_id = str(uuid.uuid4())
+        self.user_data["tasks"][task_id] = {
+            "title": title,
+            "description": description,
+            "status": "To Do",  # Estados: To Do, Doing, Done
+            "priority": priority,
+            "created_at": datetime.now().isoformat(),
+            "due_date": str(due_date) if due_date else None
+        }
+        self.save_db()
+        return task_id
+
+    def move_task(self, task_id, new_status):
+        if task_id in self.user_data["tasks"]:
+            self.user_data["tasks"][task_id]["status"] = new_status
+            self.save_db()
+
+    def delete_task(self, task_id):
+        if task_id in self.user_data["tasks"]:
+            del self.user_data["tasks"][task_id]
+            self.save_db()   
 # --- 3. FUNÇÕES DE PROCESSAMENTO DE DADOS ---
 def convert_currency_to_float(val):
     """
