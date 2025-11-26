@@ -256,17 +256,17 @@ class HistoryManager:
         return False
 
 # --- GESTÃO DE TAREFAS (MONDAY STYLE) ---
-    def create_task(self, title, description="", priority="Média", due_date=None):
+    def create_task(self, title, description="", priority="Média", assignee=None, due_date=None):
         task_id = str(uuid.uuid4())
-        # Garante que a gaveta 'tasks' existe antes de escrever
         if "tasks" not in self.user_data:
             self.user_data["tasks"] = {}
             
         self.user_data["tasks"][task_id] = {
             "title": title,
             "description": description,
-            "status": "To Do",  # Estados: To Do, Doing, Done
+            "status": "To Do",
             "priority": priority,
+            "assignee": assignee, # <--- NOVO CAMPO
             "created_at": datetime.now().isoformat(),
             "due_date": str(due_date) if due_date else None
         }
@@ -919,20 +919,94 @@ def render_tasks_page(db):
     # 1. Formulário de Nova Tarefa
     with st.expander("➕ Nova Tarefa", expanded=False):
         with st.form("new_task_form"):
-            c1, c2 = st.columns([3, 1])
+            c1, c2, c3 = st.columns([2, 1, 1])
             title = c1.text_input("Título da Tarefa")
             prio = c2.selectbox("Prioridade", ["Alta", "Média", "Baixa"])
-            desc = st.text_area("Descrição")
+            assignee = c3.text_input("Atribuir a (Email)") # Campo novo
+            desc = st.text_area("Descrição Detalhada")
             
             if st.form_submit_button("Criar Tarefa"):
                 if title:
-                    db.create_task(title, desc, prio)
-                    st.success("Tarefa Criada!")
-                    st.rerun()
+                    # Cria a tarefa
+                    db.create_task(title, desc, prio, assignee)
+                    
+                    # Lógica de Convite Automático
+                    if assignee and assignee not in db.full_db["users"]:
+                        # Se o user não existe, cria um token
+                        token = db.create_one_time_token()
+                        app_url = st.secrets.get("APP_URL", "http://localhost:8501")
+                        invite_link = f"{app_url}?token={token}"
+                        
+                        st.success("Tarefa criada!")
+                        st.info(f"👤 O utilizador '{assignee}' não está no sistema.")
+                        st.code(f"Envia-lhe este link de convite: {invite_link}", language="text")
+                        # Opcional: st.stop() para forçar o user a copiar o link antes de recarregar
+                    else:
+                        st.success("Tarefa Criada e Atribuída!")
+                        st.rerun()
                 else:
                     st.warning("Escreve um título.")
 
     st.markdown("---")
+
+    # 2. Preparar Dados
+    if "tasks" not in db.user_data: db.user_data["tasks"] = {}
+    tasks = db.user_data["tasks"]
+    
+    todo = {k:v for k,v in tasks.items() if v['status'] == 'To Do'}
+    doing = {k:v for k,v in tasks.items() if v['status'] == 'Doing'}
+    done = {k:v for k,v in tasks.items() if v['status'] == 'Done'}
+
+    col1, col2, col3 = st.columns(3)
+
+    # Função auxiliar para desenhar o cartão
+    def draw_task_card(tid, t, col_type):
+        # O Titulo é agora um Expander para ver detalhes
+        emoji_prio = "🔥" if t['priority'] == 'Alta' else "▪️"
+        
+        with st.expander(f"{emoji_prio} {t['title']}", expanded=True):
+            # Conteúdo Oculto (Descrição e Dono)
+            if t.get('description'):
+                st.markdown(f"**📝 Descrição:**\n{t['description']}")
+            else:
+                st.caption("Sem descrição.")
+            
+            st.markdown("---")
+            assigned_to = t.get('assignee') if t.get('assignee') else "Ninguém"
+            st.caption(f"👤 **Responsável:** {assigned_to}")
+            
+            # Botões de Ação
+            c_btns = st.columns(2)
+            
+            if col_type == "todo":
+                if st.button("➡️ Iniciar", key=f"start_{tid}", use_container_width=True):
+                    db.move_task(tid, "Doing"); st.rerun()
+            
+            elif col_type == "doing":
+                if c_btns[0].button("⬅️", key=f"back_{tid}", use_container_width=True):
+                    db.move_task(tid, "To Do"); st.rerun()
+                if c_btns[1].button("✅", key=f"done_{tid}", use_container_width=True):
+                    db.move_task(tid, "Done"); st.rerun()
+            
+            elif col_type == "done":
+                if st.button("♻️ Reabrir", key=f"reopen_{tid}", use_container_width=True):
+                    db.move_task(tid, "To Do"); st.rerun()
+            
+            if st.button("🗑️ Apagar", key=f"del_{tid}", use_container_width=True):
+                db.delete_task(tid); st.rerun()
+
+    # 3. Desenhar Colunas
+    with col1:
+        st.subheader("📌 A Fazer")
+        for tid, t in todo.items(): draw_task_card(tid, t, "todo")
+
+    with col2:
+        st.subheader("⚙️ Em Progresso")
+        for tid, t in doing.items(): draw_task_card(tid, t, "doing")
+
+    with col3:
+        st.subheader("🎉 Concluído")
+        for tid, t in done.items(): draw_task_card(tid, t, "done")
 
     # 2. Lógica do Kanban
     # Garante que a gaveta de tarefas existe
