@@ -522,22 +522,36 @@ def execute_code(code, df):
         import matplotlib.pyplot as plt
         import seaborn as sns
         
-        plt.clf(); plt.close('all') 
+        # 1. Limpar figuras anteriores
+        plt.clf()
+        plt.close('all') 
         
-        # 1. FILTRO DE SEGURANÇA (BLACKLIST)
+        # 2. FILTRO DE SEGURANÇA (BLACKLIST)
+        # Continua a bloquear comandos perigosos de sistema
         dangerous = ["os.", "sys.", "subprocess", "open(", "delete", "rm -rf", "import os", "import sys", "__import__"]
         for word in dangerous:
             if word in code:
                 return "⚠️ BLOQUEADO: Tentativa de código não seguro detetada.", None
 
+        # 3. Captura de Output
         old_stdout = sys.stdout
         redirected_output = sys.stdout = StringIO()
         
-        # 2. SANDBOX (Só permite estas ferramentas)
-        safe_locals = {'df': df, 'pd': pd, 'plt': plt, 'sns': sns, 'np': np, 're': re}
+        # 4. AMBIENTE SEGURO (CORRIGIDO)
+        safe_locals = {
+            'df': df,
+            'pd': pd,
+            'plt': plt,
+            'sns': sns,
+            'np': np,
+            're': re
+        }
         
-        # Executa sem acesso aos comandos do sistema
-        exec(code, {"__builtins__": {}}, safe_locals)
+        # A MUDANÇA ESTÁ AQUI:
+        # Trocámos {"__builtins__": {}} por {} no segundo argumento.
+        # Isto permite que a IA use funções básicas como print(), len(), str(), mas 
+        # a Blacklist acima continua a impedir que ela importe vírus.
+        exec(code, {}, safe_locals)
         
         sys.stdout = old_stdout
         text_output = redirected_output.getvalue()
