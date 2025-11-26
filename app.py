@@ -912,6 +912,89 @@ def render_data_hub_page(db):
 
 
 # --- O NOVO CONTROLADOR PRINCIPAL ---
+
+def render_tasks_page(db):
+    st.title("🔨 Gestão de Tarefas")
+    
+    # 1. Formulário de Nova Tarefa
+    with st.expander("➕ Nova Tarefa", expanded=False):
+        with st.form("new_task_form"):
+            c1, c2 = st.columns([3, 1])
+            title = c1.text_input("Título da Tarefa")
+            prio = c2.selectbox("Prioridade", ["Alta", "Média", "Baixa"])
+            desc = st.text_area("Descrição")
+            
+            if st.form_submit_button("Criar Tarefa"):
+                if title:
+                    db.create_task(title, desc, prio)
+                    st.success("Tarefa Criada!")
+                    st.rerun()
+                else:
+                    st.warning("Escreve um título.")
+
+    st.markdown("---")
+
+    # 2. Lógica do Kanban
+    # Garante que a gaveta de tarefas existe
+    if "tasks" not in db.user_data:
+        db.user_data["tasks"] = {}
+        
+    tasks = db.user_data["tasks"]
+    todo = {k:v for k,v in tasks.items() if v['status'] == 'To Do'}
+    doing = {k:v for k,v in tasks.items() if v['status'] == 'Doing'}
+    done = {k:v for k,v in tasks.items() if v['status'] == 'Done'}
+
+    # 3. Desenhar as 3 Colunas
+    col1, col2, col3 = st.columns(3)
+
+    # --- COLUNA TO DO ---
+    with col1:
+        st.subheader("📌 A Fazer")
+        for tid, t in todo.items():
+            with st.container(border=True):
+                st.markdown(f"**{t['title']}**")
+                if t['priority'] == 'Alta': st.caption("🔥 Alta Prioridade")
+                
+                # Botão para mover para a direita (Doing)
+                if st.button("➡️ Iniciar", key=f"start_{tid}"):
+                    db.move_task(tid, "Doing")
+                    st.rerun()
+                
+                if st.button("🗑️", key=f"del_{tid}"):
+                    db.delete_task(tid)
+                    st.rerun()
+
+    # --- COLUNA DOING ---
+    with col2:
+        st.subheader("⚙️ Em Progresso")
+        for tid, t in doing.items():
+            with st.container(border=True):
+                st.markdown(f"**{t['title']}**")
+                st.caption(f"Desde: {t['created_at'][:10]}")
+                
+                c_a, c_b = st.columns(2)
+                if c_a.button("⬅️", key=f"back_{tid}"): # Voltar para To Do
+                    db.move_task(tid, "To Do")
+                    st.rerun()
+                if c_b.button("✅", key=f"finish_{tid}"): # Ir para Done
+                    db.move_task(tid, "Done")
+                    st.rerun()
+
+    # --- COLUNA DONE ---
+    with col3:
+        st.subheader("🎉 Concluído")
+        for tid, t in done.items():
+            with st.container(border=True):
+                st.markdown(f"~~{t['title']}~~") # Riscado
+                st.caption("Concluído")
+                
+                if st.button("♻️ Reabrir", key=f"reopen_{tid}"):
+                    db.move_task(tid, "To Do")
+                    st.rerun()
+
+
+
+
 def main_app():
     user = st.session_state.get('username', 'User')
     is_guest = st.session_state.get('is_guest', False)
