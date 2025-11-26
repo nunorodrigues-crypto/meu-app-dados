@@ -35,7 +35,15 @@ class HistoryManager:
         self.username = username
         self.load_db()
 
-   def load_db(self):
+   # --- 2. GESTOR DE BASE DE DADOS (JSON) ---
+HISTORY_FILE = "chat_database.json"
+
+class HistoryManager:
+    def __init__(self, username="system"):
+        self.username = username
+        self.load_db()
+
+    def load_db(self):
         # 1. Se não existir ficheiro, cria estrutura base
         if not os.path.exists(HISTORY_FILE):
             init_db = {
@@ -51,12 +59,11 @@ class HistoryManager:
             self.full_db = json.load(f)
         
         # 3. Garantir integridade da estrutura Raiz
-        # (Adicionamos isto para garantir que chaves novas não quebram bases antigas)
         defaults = ["workspaces", "guest_tokens"]
         for d in defaults:
             if d not in self.full_db: self.full_db[d] = {}
         
-        # 4. Criar user se não existir (AGORA COM AS GAVETAS NOVAS)
+        # 4. Criar user se não existir
         if self.username not in self.full_db["users"]:
             self.full_db["users"][self.username] = {
                 "chats": {}, 
@@ -69,16 +76,24 @@ class HistoryManager:
         
         self.user_data = self.full_db["users"][self.username]
 
-        # 5. MIGRADOR AUTOMÁTICO (CRÍTICO!)
-        # Se o user já existia (ex: 'admin'), ele não tem as gavetas novas.
-        # Este loop garante que elas são criadas agora, evitando erros.
+        # 5. MIGRADOR AUTOMÁTICO
         required_keys = ["chats", "tasks", "docs", "datasets"]
         for key in required_keys:
             if key not in self.user_data:
                 self.user_data[key] = {}
         
-        # Define o atalho para os chats (mantém compatibilidade)
         self.user_chats = self.user_data["chats"]
+
+    def save_db(self):
+        self.full_db["users"][self.username] = self.user_data
+        with open(HISTORY_FILE, 'w') as f:
+            json.dump(self.full_db, f, indent=4, default=str)
+
+    def save_db(self):
+        # ... (O resto do teu código continua igual daqui para baixo)
+        self.full_db["users"][self.username] = self.user_data
+        with open(HISTORY_FILE, 'w') as f:
+            json.dump(self.full_db, f, indent=4, default=str)
 
     def save_db(self):
         self.full_db["users"][self.username] = self.user_data
