@@ -256,8 +256,12 @@ class HistoryManager:
         return False
 
 # --- GESTÃO DE TAREFAS (MONDAY STYLE) ---
-def create_task(self, title, description="", priority="Média", due_date=None):
+    def create_task(self, title, description="", priority="Média", due_date=None):
         task_id = str(uuid.uuid4())
+        # Garante que a gaveta 'tasks' existe antes de escrever
+        if "tasks" not in self.user_data:
+            self.user_data["tasks"] = {}
+            
         self.user_data["tasks"][task_id] = {
             "title": title,
             "description": description,
@@ -270,14 +274,15 @@ def create_task(self, title, description="", priority="Média", due_date=None):
         return task_id
 
     def move_task(self, task_id, new_status):
-        if task_id in self.user_data["tasks"]:
+        if "tasks" in self.user_data and task_id in self.user_data["tasks"]:
             self.user_data["tasks"][task_id]["status"] = new_status
             self.save_db()
 
     def delete_task(self, task_id):
-        if task_id in self.user_data["tasks"]:
+        if "tasks" in self.user_data and task_id in self.user_data["tasks"]:
             del self.user_data["tasks"][task_id]
-            self.save_db()   
+            self.save_db()
+
 # --- 3. FUNÇÕES DE PROCESSAMENTO DE DADOS ---
 def convert_currency_to_float(val):
     """
@@ -869,9 +874,33 @@ def render_dashboard(db, user, persona, api_key, selected_ws_id):
 
 
 # --- PLACEHOLDERS PARA AS NOVAS FEATURES ---
-def render_tasks_page(db):
-    st.title("🔨 Gestão de Tarefas")
-    st.info("🚧 Módulo em construção: Aqui ficará o quadro Kanban (Monday Style).")
+# --- GESTÃO DE TAREFAS (MONDAY STYLE) ---
+    def create_task(self, title, description="", priority="Média", due_date=None):
+        task_id = str(uuid.uuid4())
+        # Garante que a gaveta 'tasks' existe antes de escrever
+        if "tasks" not in self.user_data:
+            self.user_data["tasks"] = {}
+            
+        self.user_data["tasks"][task_id] = {
+            "title": title,
+            "description": description,
+            "status": "To Do",  # Estados: To Do, Doing, Done
+            "priority": priority,
+            "created_at": datetime.now().isoformat(),
+            "due_date": str(due_date) if due_date else None
+        }
+        self.save_db()
+        return task_id
+
+    def move_task(self, task_id, new_status):
+        if "tasks" in self.user_data and task_id in self.user_data["tasks"]:
+            self.user_data["tasks"][task_id]["status"] = new_status
+            self.save_db()
+
+    def delete_task(self, task_id):
+        if "tasks" in self.user_data and task_id in self.user_data["tasks"]:
+            del self.user_data["tasks"][task_id]
+            self.save_db()
 
 def render_docs_page(db):
     st.title("🧠 Documentação")
