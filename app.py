@@ -1,3 +1,4 @@
+import numpy as np # Importação explícita no topo
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -17,7 +18,10 @@ import requests
 import qrcode
 import urllib.parse
 from streamlit_oauth import OAuth2Component
-import numpy as np # Importação explícita no topo
+import hashlib
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
 
 # --- 1. CONFIGURAÇÃO GERAL ---
 st.set_page_config(
@@ -26,14 +30,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# --- 2. GESTOR DE BASE DE DADOS (JSON) ---
-HISTORY_FILE = "chat_database.json"
-
-class HistoryManager:
-    def __init__(self, username="system"):
-        self.username = username
-        self.load_db()
 
    # --- 2. GESTOR DE BASE DE DADOS (JSON) ---
 HISTORY_FILE = "chat_database.json"
@@ -1462,3 +1458,288 @@ if __name__ == "__main__":
         main_app()
     else: 
         login_page()
+
+# --- 1. FUNÇÕES AUXILIARES DE BACKEND (SEM MEXER NA CLASSE ANTIGA) ---
+
+def ext_hash_pass(password):
+    """Cria segurança para as passwords."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def ext_register_user(db, username, password, email):
+    """Regista utilizador injetando diretamente no JSON do HistoryManager."""
+    if username in db.full_db["users"]:
+        return False, "Utilizador já existe."
+    
+    # Cria a estrutura do novo user
+    db.full_db["users"][username] = {
+        "password": ext_hash_pass(password), # Guarda encriptado
+        "email": email,
+        "created_at": datetime.now().isoformat(),
+        "plan": "free",
+        "chats": {}, "tasks": {}, "docs": {}, "datasets": {}, "workspaces": []
+    }
+    # Força a gravação usando o método nativo da classe antiga
+    with open(HISTORY_FILE, 'w') as f:
+        json.dump(db.full_db, f, indent=4, default=str)
+    return True, "Conta criada com sucesso!"
+
+def ext_save_dataset_version(db, name, description, df, parent_id=None):
+    """Guarda versões de dados (Lógica Data Hub)."""
+    # Garante que a gaveta existe no user atual
+    if "datasets" not in db.user_data: db.user_data["datasets"] = {}
+    
+    data_json = df.to_json(orient='split', date_format='iso')
+    timestamp = datetime.now().isoformat()
+    
+    if parent_id and parent_id in db.user_data["datasets"]:
+        # É uma nova versão (Commit)
+        ds = db.user_data["datasets"][parent_id]
+        new_v = f"v{len(ds['commits']) + 1}"
+        ds["commits"].insert(0, {
+            "version": new_v,
+            "message": description,
+            "timestamp": timestamp,
+            "author": db.username,
+            "data_snapshot": data_json
+        })
+        ds["current_version"] = new_v
+        ds_id = parent_id
+    else:
+        # É um novo Dataset
+        ds_id = str(uuid.uuid4())
+        db.user_data["datasets"][ds_id] = {
+            "name": name,
+            "description": description,
+            "created_at": timestamp,
+            "owner": db.username,
+            "current_version": "v1",
+            "commits": [{
+                "version": "v1", "message": "Importação Inicial",
+                "timestamp": timestamp, "author": db.username,
+                "data_snapshot": data_json
+            }]
+        }
+    
+    db.save_db() # Usa o save original
+    return ds_id
+
+def ext_get_dataset(db, ds_id):
+    """Recupera o dataset para o ML."""
+    if "datasets" in db.user_data and ds_id in db.user_data["datasets"]:
+        ds = db.user_data["datasets"][ds_id]
+        # Pega o commit mais recente
+        json_data = ds["commits"][0]["data_snapshot"]
+        return pd.read_json(StringIO(json_data), orient='split')
+    return None
+
+# --- 2. NOVAS PÁGINAS DE INTERFACE ---
+
+def page_login_register():
+    st.markdown("<h1 style='text-align: center;'>🔐 Acesso Seguro</h1>", unsafe_allow_html=True)
+    t1, t2 = st.tabs(["Entrar", "Criar Conta Nova"])
+    
+    with t1:
+        with st.form("login_v2"):
+            u = st.text_input("Utilizador")
+            p = st.text_input("Password", type="password")
+            if st.form_submit_button("Entrar"):
+                db = HistoryManager()
+                # Verifica se é user antigo (sem password) ou novo (com hash)
+                user_data = db.full_db["users"].get(u)
+                
+                valid = False
+                if user_data:
+                    stored_pass = user_data.get("password")
+                    if not stored_pass: valid = True # Permite users antigos entrarem
+                    elif stored_pass == ext_hash_pass(p): valid = True
+                
+                # Admin backdoor
+                if (u == "admin" and p == "123") or valid:
+                    st.session_state['authenticated'] = True
+                    st.session_state['username'] = u
+                    st.rerun()
+                else:
+                    st.error("Credenciais inválidas.")
+
+    with t2:
+        with st.form("register_v2"):
+            new_u = st.text_input("Novo Utilizador")
+            new_mail = st.text_input("Email")
+            new_p = st.text_input("Password", type="password")
+            if st.form_submit_button("Registar-se"):
+                db = HistoryManager()
+                ok, msg = ext_register_user(db, new_u, new_p, new_mail)
+                if ok: st.success(msg)
+                else: st.error(msg)
+
+def page_data_hub_ui(db):
+    st.title("🧬 Data Hub (Gestão de Versões)")
+    
+    # 1. Upload e Criação
+    with st.expander("➕ Novo Dataset / Upload"):
+        up_file = st.file_uploader("Ficheiro CSV/Excel")
+        d_name = st.text_input("Nome do Projeto")
+        if st.button("Criar Versão v1") and up_file and d_name:
+            df = pd.read_csv(up_file) if up_file.name.endswith('.csv') else pd.read_excel(up_file)
+            df = smart_clean_dataframe(df) # Usa a tua função antiga
+            
+            ds_id = ext_save_dataset_version(db, d_name, "Upload Inicial", df)
+            
+            # Automação: Criar Doc inicial
+            db.create_doc(f"DataHub: {d_name}", f"Dataset criado.\nLinhas: {len(df)}\nColunas: {list(df.columns)}")
+            st.success("Dataset criado e documentado nos Docs!")
+            time.sleep(1); st.rerun()
+
+    # 2. Listagem
+    if "datasets" not in db.user_data: st.info("Sem datasets."); return
+    
+    for did, data in db.user_data["datasets"].items():
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([3, 1, 1])
+            c1.markdown(f"**{data['name']}** ({data['current_version']})")
+            c1.caption(data['commits'][0]['message'])
+            
+            if c2.button("📊 Analisar", key=f"btn_anl_{did}"):
+                # Carrega para a memória global para a IA usar
+                st.session_state['temp_df'] = ext_get_dataset(db, did)
+                st.session_state['temp_files'] = [data['name']]
+                st.toast("Carregado para Análise IA")
+                
+            if c3.button("🤖 Treinar ML", key=f"btn_ml_{did}"):
+                st.session_state['ml_target_id'] = did
+                st.session_state['force_page'] = "🤖 ML Studio"
+                st.rerun()
+
+def page_ml_studio_ui(db):
+    st.title("🤖 ML Studio & Pipelines")
+    
+    target_id = st.session_state.get('ml_target_id')
+    if not target_id: st.warning("Por favor seleciona um dataset no Data Hub."); return
+    
+    df = ext_get_dataset(db, target_id)
+    ds_name = db.user_data["datasets"][target_id]["name"]
+    st.write(f"Dataset Selecionado: **{ds_name}**")
+    
+    target_col = st.selectbox("Coluna Alvo (O que prever?)", df.columns)
+    
+    if st.button("🚀 Executar Pipeline (Treino -> Doc -> DataHub)"):
+        with st.spinner("A treinar modelo e a gerar versões..."):
+            try:
+                # 1. Preparação (Limpeza rápida para ML)
+                df_clean = df.copy().dropna()
+                label_map = {}
+                for col in df_clean.select_dtypes(include='object').columns:
+                    le = LabelEncoder()
+                    df_clean[col] = le.fit_transform(df_clean[col].astype(str))
+                    label_map[col] = "Codificado"
+
+                X = df_clean.drop(columns=[target_col])
+                y = df_clean[target_col]
+                
+                # 2. Modelo Inteligente (Auto-Select)
+                is_regression = (y.dtype in ['float64', 'int64'] and y.nunique() > 10)
+                if is_regression:
+                    model = RandomForestRegressor(n_estimators=50)
+                    metric_name = "R² Score"
+                else:
+                    model = RandomForestClassifier(n_estimators=50)
+                    metric_name = "Acurácia"
+                
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+                model.fit(X_train, y_train)
+                score = model.score(X_test, y_test)
+                
+                # 3. Previsão no Dataset Original
+                # Prepara o dataset completo para previsão
+                full_X = df_clean.drop(columns=[target_col])
+                preds = model.predict(full_X)
+                
+                df_result = df.copy()
+                df_result['ML_Prediction'] = preds # Adiciona a coluna nova
+                
+                # 4. STEP CRÍTICO: DATA HUB (Nova Versão)
+                msg_commit = f"ML Run: Target={target_col} | {metric_name}={score:.2f}"
+                ext_save_dataset_version(db, ds_name, msg_commit, df_result, parent_id=target_id)
+                
+                # 5. STEP CRÍTICO: DOCS
+                doc_body = f"""# Relatório ML Automático
+**Dataset:** {ds_name}
+**Alvo:** {target_col}
+**Performance ({metric_name}):** {score:.2f}
+
+O modelo foi treinado, gerou previsões e criou uma nova versão no Data Hub.
+"""
+                db.create_doc(f"Relatório ML: {ds_name}", doc_body)
+                
+                st.success(f"Pipeline Sucesso! Nova versão criada no Data Hub e Relatório nos Docs.")
+                st.balloons()
+                
+            except Exception as e:
+                st.error(f"Erro no ML: {e}")
+
+# --- 3. GESTOR DE NAVEGAÇÃO ROBUSTO (SUBSTITUI O MAIN ANTIGO) ---
+
+def main_extended():
+    # Inicialização Segura
+    if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
+    
+    # Tratamento de Erros Global (Anti-Crash)
+    try:
+        if not st.session_state["authenticated"]:
+            page_login_register()
+        else:
+            # Carrega utilizador e DB
+            user = st.session_state.get('username', 'system')
+            db = HistoryManager(user) # Usa a classe original
+            
+            # Lógica de Redirecionamento (Force Page)
+            if 'force_page' in st.session_state:
+                current_page = st.session_state['force_page']
+                # Limpa a força para permitir navegação
+                # (Mantemos na session state apenas o index se necessário)
+            
+            with st.sidebar:
+                st.header("👁️ AInsight Pro")
+                st.caption(f"User: {user}")
+                
+                # Menu Expandido
+                menu_opts = ["📊 Análise IA", "🧬 Data Hub", "🤖 ML Studio", "🔨 Tarefas", "🧠 Docs"]
+                
+                # Sincroniza o index da sidebar se houver force_page
+                idx = 0
+                if 'force_page' in st.session_state and st.session_state['force_page'] in menu_opts:
+                    idx = menu_opts.index(st.session_state['force_page'])
+                    del st.session_state['force_page']
+                    
+                page = st.radio("Menu", menu_opts, index=idx)
+                
+                st.divider()
+                if st.button("Sair"):
+                    st.session_state.clear()
+                    st.rerun()
+
+            # Roteador
+            api_key = st.secrets.get("GEMINI_API_KEY", "")
+            
+            if page == "📊 Análise IA":
+                # Chama a tua função antiga
+                render_dashboard(db, user, "Data Scientist", api_key, None)
+            elif page == "🧬 Data Hub":
+                page_data_hub_ui(db)
+            elif page == "🤖 ML Studio":
+                page_ml_studio_ui(db)
+            elif page == "🔨 Tarefas":
+                render_tasks_page(db) # Função antiga
+            elif page == "🧠 Docs":
+                render_docs_page(db) # Função antiga
+
+    except Exception as e:
+        st.error("⚠️ Erro de sistema. Por favor recarregue.")
+        with st.expander("Detalhes técnicos"):
+            st.code(e)
+        if st.button("Recarregar"):
+            st.rerun()
+
+# Ponto de Entrada
+if __name__ == "__main__":
+    main_extended()
