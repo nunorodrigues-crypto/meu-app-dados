@@ -565,159 +565,57 @@ def smart_merge(files=None, url_df=None, url_name=None):
         return None, f"Erro na fusão: {e}"
 
 # --- 4. CÉREBRO DE IA (GEMINI) ---
-def ask_gemini(df, query, api_key, context, file_list, persona):
+def ask_gemini(df, query, api_key, persona, *args, **kwargs):
     genai.configure(api_key=api_key)
     
-    # 1. Seleção de Modelo
-    chosen_model = "gemini-pro"
+    # 1. AUTO-DETEÇÃO DE MODELO (Para corrigir o erro 404)
+    chosen_model = "gemini-pro" # Fallback
     try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        if 'models/gemini-1.5-pro' in models: chosen_model = 'models/gemini-1.5-pro'
+        # Pergunta à Google o que tens disponível
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                if 'flash' in m.name: 
+                    chosen_model = m.name; break
+                elif '1.5-pro' in m.name: 
+                    chosen_model = m.name
     except: pass
-    
-    model = genai.GenerativeModel(chosen_model)
-    
-    # 2. Personas com Foco "Blindado"
-    personas_prompts = {
-        "Data Scientist": "Atue como Data Scientist Senior. Seja técnico, preciso e procure correlações estatísticas.",
-        "CFO (Financeiro)": "Atue como CFO. Foque EXCLUSIVAMENTE em métricas financeiras (Receita, Custo, Margem, Lucro). Ignore métricas de vaidade.",
-        "CMO (Marketing)": "Atue como CMO. Foque em Conversão, CAC, ROAS e Canais de Aquisição.",
-        "COO (Operacional)": "Atue como COO. Foque em Eficiência, Volume de Pedidos, Prazos e Logística."
-    }
-    p_txt = personas_prompts.get(persona, "Atue como Analista de Dados.")
-    
-    # 3. EXTRAÇÃO DE METADADOS (Para a IA não alucinar colunas)
-    # Cria uma lista limpa tipo: "- valor_venda (float64)"
-    columns_info = "\n".join([f"- {col} ({dtype})" for col, dtype in df.dtypes.items()])
 
-    # 4. PROMPT DE ENGENHARIA ESTRITA
+    # 2. Definição do Prompt
+    p_text = f"Atue como {persona}. Analise o dataframe."
+    cols = "\n".join([f"- {c} ({t})" for c, t in df.dtypes.items()])
+    
     prompt = f"""
-    {p_txt}
+    {p_text}
+    DADOS (df): {cols}
+    PERGUNTA: "{query}"
     
-    CONTEXTO DO NEGÓCIO: {context}
-    
-    --- DADOS DISPONÍVEIS (DATAFRAME 'df') ---
-    O dataframe 'df' JÁ ESTÁ LIMPO e carregado em memória.
-    As colunas exatas disponíveis são:
-    {columns_info}
-    
-    PERGUNTA DO UTILIZADOR: "{query}"
-    
-    --- REGRAS DE OURO (PYTHON) ---
-    1. USE APENAS AS COLUNAS LISTADAS ACIMA. Não invente nomes.
-    2. NÃO use pd.read_csv(). Use a variável 'df' diretamente.
-    3. Importe sempre: import pandas as pd; import matplotlib.pyplot as plt; import seaborn as sns; import numpy as np
-    4. Valores monetários JÁ SÃO FLOAT. Não tente limpar strings com .replace(). Apenas calcule.
-    5. Gráficos: Use plt.figure(figsize=(10,6)) antes de plotar. Use sns.barplot, sns.lineplot, etc.
-    6. Responda APENAS com código Python executável dentro de blocos ```python ... ```.
+    REGRAS:
+    1. O df já existe. NÃO uses pd.read_csv.
+    2. Responde APENAS com código Python em blocos ```python```.
+    3. Importa: import pandas as pd; import matplotlib.pyplot as plt; import seaborn as sns
+    4. Gráficos: plt.figure(figsize=(10,6)).
     """
     
     try:
-        response = model.generate_content(prompt)
-        
-        # Extração segura do código
-        match = re.search(r"```python(.*?)```", response.text, re.DOTALL)
-        if match:
-            return match.group(1).strip()
-        else:
-            # Fallback: Se a IA esquecer os backticks, tenta usar o texto se parecer código
-            clean_text = response.text.replace("```", "").strip()
-            if "plt." in clean_text or "print" in clean_text:
-                return clean_text
-            return f"print('A IA não gerou código válido. Resposta: {clean_text}')"
-            
+        model = genai.GenerativeModel(chosen_model)
+        res = model.generate_content(prompt)
+        match = re.search(r"```python(.*?)```", res.text, re.DOTALL)
+        return match.group(1).strip() if match else res.text.replace("```", "").strip()
     except Exception as e:
-        return f"print('Erro crítico na IA: {e}')"
-    
-    # Prompt com IMPORT OBRIGATÓRIO para corrigir erro 'pd not defined'
-    
-    prompt = f"""
-    {persona_text}
-    
-    CONTEXTO DE NEGÓCIO: {context}
-    NOMES DOS FICHEIROS CARREGADOS: {', '.join(file_list)}
-    
-    ESTRUTURA DOS DADOS (DataFrame 'df'):
-    {df.dtypes.to_string()}
-    
-    PERGUNTA DO UTILIZADOR: "{query}"
-    
-    REGRAS OBRIGATÓRIAS (CRÍTICO):
-    1. NÃO use pd.read_csv() nem pd.read_excel(). Os ficheiros NÃO estão no disco.
-    2. Os dados JÁ estão carregados na memória na variável 'df'. Use APENAS 'df'.
-    3. Comece sempre com os imports: import pandas as pd; import matplotlib.pyplot as plt; import seaborn as sns; import numpy as np
-    4. Use print() para escrever a resposta de texto.
-    5. Use plt.figure() para criar gráficos.
-    """
-    
-    # ... (o resto da função continua igual) ...
-    
-    try:
-        response = model.generate_content(prompt)
-        # Limpeza do código
-        match = re.search(r"```python(.*?)```", response.text, re.DOTALL)
-        return match.group(1).strip() if match else response.text.replace("```", "").strip()
-    except Exception as e:
-        return f"print('Erro na IA: {e}')"
+        return f"print('Erro IA ({chosen_model}): {e}')"
 
-def execute_code(code, df):
-    try:
-        import matplotlib.pyplot as plt
-        import seaborn as sns
-        
-        # 1. Limpar figuras anteriores
-        plt.clf()
-        plt.close('all') 
-        
-        # 2. FILTRO DE SEGURANÇA (BLACKLIST)
-        # Continua a bloquear comandos perigosos de sistema
-        dangerous = ["os.", "sys.", "subprocess", "open(", "delete", "rm -rf", "import os", "import sys", "__import__"]
-        for word in dangerous:
-            if word in code:
-                return "⚠️ BLOQUEADO: Tentativa de código não seguro detetada.", None
-
-        # 3. Captura de Output
-        old_stdout = sys.stdout
-        redirected_output = sys.stdout = StringIO()
-        
-        # 4. AMBIENTE SEGURO (CORRIGIDO)
-        safe_locals = {
-            'df': df,
-            'pd': pd,
-            'plt': plt,
-            'sns': sns,
-            'np': np,
-            're': re
-        }
-        
-        # A MUDANÇA ESTÁ AQUI:
-        # Trocámos {"__builtins__": {}} por {} no segundo argumento.
-        # Isto permite que a IA use funções básicas como print(), len(), str(), mas 
-        # a Blacklist acima continua a impedir que ela importe vírus.
-        exec(code, {}, safe_locals)
-        
-        sys.stdout = old_stdout
-        text_output = redirected_output.getvalue()
-        
-        fig = plt.gcf()
-        if not plt.gca().has_data(): fig = None
-        
-        return text_output, fig
-
-    except Exception as e:
-        sys.stdout = sys.__stdout__
-        return f"❌ Erro de Execução: {str(e)}", None
-
-def generate_role_insights(df, persona, api_key, context, file_list):
-    # Perguntas automáticas por cargo
+def generate_role_insights(df, persona, api_key, *args, **kwargs):
+    # Perguntas automáticas
     queries = {
-        "CFO (Financeiro)": "Resumo Financeiro: Total Receitas, Custos e Margens ao longo do tempo.",
-        "CMO (Marketing)": "Resumo Marketing: Top Produtos/Canais e Tendências de Vendas.",
-        "COO (Operacional)": "Resumo Operacional: Volume total de pedidos, picos de carga por data e status.",
-        "Data Scientist": "Análise Técnica: df.describe(), nulos e correlações."
+        "CFO (Financeiro)": "Resumo financeiro: Receitas, Custos e Margens (com gráficos).",
+        "CMO (Marketing)": "Top produtos vendidos e performance de canais.",
+        "COO (Operacional)": "Volume de pedidos, eficiência e prazos.",
+        "Data Scientist": "Análise exploratória: describe, correlações e valores nulos."
     }
     query = queries.get(persona, "Resumo Geral")
-    code = ask_gemini(df, query, api_key, context, file_list, persona)
+    
+    # Chama a IA (agora segura com a correção 1)
+    code = ask_gemini(df, query, api_key, persona)
     return query, code
 
 def create_pdf(chat_data):
@@ -870,6 +768,26 @@ def login_page():
                 else:
                     st.error("Código inválido ou já usado.")
 
+def execute_code(code, df):
+    try:
+        old_stdout = sys.stdout
+        redirected_output = sys.stdout = StringIO()
+        
+        local_vars = {'df': df, 'pd': pd, 'plt': plt, 'sns': sns, 'np': np}
+        exec(code, {}, local_vars)
+        
+        sys.stdout = old_stdout
+        text_out = redirected_output.getvalue()
+        
+        fig = plt.gcf()
+        if not plt.gca().has_data(): fig = None
+        else: plt.clf() 
+        
+        return text_out, fig
+    except Exception as e:
+        sys.stdout = sys.__stdout__
+        return f"Erro Código: {e}", None
+
 def render_dashboard(db, user, persona, api_key, selected_ws_id):
     """
     ANTIGO CÉREBRO: Contém toda a lógica de Chat, Upload e Gráficos.
@@ -917,7 +835,7 @@ def render_dashboard(db, user, persona, api_key, selected_ws_id):
                         else:
                             new_id = db.create_chat(f"Relatório Auto: {persona}", workspace_id=selected_ws_id)
                             with st.spinner("A gerar relatório..."):
-                                q, code = generate_role_insights(df, persona, api_key, context, fn)
+                                q, code = generate_role_insights(st.session_state['temp_df'], persona, api_key)
                                 txt, fig = execute_code(code, df)
                                 c_data = db.get_chat(new_id)
                                 c_data["messages"].extend([{"role": "user", "content": q}, {"role": "assistant", "content": txt}])
