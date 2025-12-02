@@ -1450,14 +1450,7 @@ def main_app():
         render_tasks_page(db)
     elif page == "🧠 Docs":
         render_docs_page(db)
-if __name__ == "__main__":
-    if "authenticated" not in st.session_state: 
-        st.session_state["authenticated"] = False
-    
-    if st.session_state["authenticated"]: 
-        main_app()
-    else: 
-        login_page()
+
 
 # --- 1. FUNÇÕES AUXILIARES DE BACKEND (SEM MEXER NA CLASSE ANTIGA) ---
 
