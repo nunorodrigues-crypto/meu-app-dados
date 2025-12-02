@@ -308,6 +308,86 @@ class HistoryManager:
         if "docs" in self.user_data and doc_id in self.user_data["docs"]:
             del self.user_data["docs"][doc_id]
             self.save_db()
+    
+    # --- GESTÃO DE DATASETS (DATA HUB - GITHUB STYLE) ---
+    def create_dataset(self, name, description, dataframe):
+        dataset_id = str(uuid.uuid4())
+        
+        # Garante que a gaveta existe
+        if "datasets" not in self.user_data:
+            self.user_data["datasets"] = {}
+
+        # Serializa o DataFrame para JSON para guardar no ficheiro
+        data_json = dataframe.to_json(orient='split', date_format='iso')
+
+        self.user_data["datasets"][dataset_id] = {
+            "name": name,
+            "description": description,
+            "created_at": datetime.now().isoformat(),
+            "owner": self.username,
+            "current_version": "v1",
+            "commits": [
+                {
+                    "version": "v1",
+                    "message": "🌱 Importação inicial (Genesis Commit)",
+                    "timestamp": datetime.now().isoformat(),
+                    "author": self.username,
+                    "data_snapshot": data_json # Guarda os dados desta versão
+                }
+            ]
+        }
+        self.save_db()
+        return dataset_id
+
+    def add_commit(self, dataset_id, message, dataframe):
+        if "datasets" in self.user_data and dataset_id in self.user_data["datasets"]:
+            ds = self.user_data["datasets"][dataset_id]
+            
+            # Calcula nova versão (ex: v1 -> v2)
+            last_v = int(ds["current_version"].replace("v", ""))
+            new_v = f"v{last_v + 1}"
+            
+            data_json = dataframe.to_json(orient='split', date_format='iso')
+            
+            new_commit = {
+                "version": new_v,
+                "message": message,
+                "timestamp": datetime.now().isoformat(),
+                "author": self.username,
+                "data_snapshot": data_json
+            }
+            
+            # Adiciona ao histórico (no topo)
+            ds["commits"].insert(0, new_commit)
+            ds["current_version"] = new_v
+            
+            self.save_db()
+            return True
+        return False
+    
+    def get_dataset_version(self, dataset_id, version_tag=None):
+        """Recupera o DataFrame de uma versão específica"""
+        if "datasets" in self.user_data and dataset_id in self.user_data["datasets"]:
+            ds = self.user_data["datasets"][dataset_id]
+            target_commit = None
+            
+            if version_tag:
+                # Procura a versão específica
+                for commit in ds["commits"]:
+                    if commit["version"] == version_tag:
+                        target_commit = commit
+                        break
+            else:
+                # Pega a mais recente (índice 0)
+                target_commit = ds["commits"][0]
+            
+            if target_commit:
+                try:
+                    # Reconstrói o DataFrame a partir do JSON
+                    return pd.read_json(StringIO(target_commit["data_snapshot"]), orient='split')
+                except:
+                    return None
+        return None
 
 # --- 3. FUNÇÕES DE PROCESSAMENTO DE DADOS ---
 def convert_currency_to_float(val):
@@ -1021,7 +1101,131 @@ def render_docs_page(db):
 
 def render_data_hub_page(db):
     st.title("🧬 Data Hub")
-    st.info("🚧 Módulo em construção: Aqui ficará o versionamento de dados (GitHub Style).")
+    st.caption("Versionamento e Colaboração de Dados (GitHub Style)")
+
+    # Inicializa gaveta se não existir
+    if "datasets" not in db.user_data: db.user_data["datasets"] = {}
+    datasets = db.user_data["datasets"]
+
+    # Tabs de Navegação
+    tab_list, tab_new = st.tabs(["📂 Meus Datasets", "➕ Novo Dataset"])
+
+    # --- TAB: NOVO DATASET ---
+    with tab_new:
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            st.markdown("### Criar Repositório")
+            d_name = st.text_input("Nome do Dataset (ex: Vendas_Q3)")
+            d_desc = st.text_area("Descrição")
+            uploaded_file = st.file_uploader("Carregar CSV/Excel Inicial", type=['csv', 'xlsx'])
+            
+            if st.button("🚀 Criar Dataset", use_container_width=True):
+                if d_name and uploaded_file:
+                    try:
+                        if uploaded_file.name.endswith('.csv'):
+                            df = pd.read_csv(uploaded_file)
+                        else:
+                            df = pd.read_excel(uploaded_file)
+                        
+                        # Limpeza básica antes de salvar
+                        df = smart_clean_dataframe(df)
+                        
+                        db.create_dataset(d_name, d_desc, df)
+                        st.success(f"Repositório '{d_name}' criado com sucesso!")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao ler ficheiro: {e}")
+                else:
+                    st.warning("Preencha o nome e carregue um ficheiro.")
+
+    # --- TAB: LISTA E DETALHES ---
+    with tab_list:
+        if not datasets:
+            st.info("Ainda não tens datasets versionados. Cria um na aba 'Novo Dataset'.")
+        else:
+            # Layout: Sidebar Esquerda (Lista) | Painel Direito (Detalhes)
+            col_left, col_right = st.columns([1, 2])
+
+            # --- COLUNA DA ESQUERDA: LISTA DE DATASETS ---
+            with col_left:
+                st.subheader("Repositórios")
+                for did, data in datasets.items():
+                    # Card estilo GitHub
+                    with st.container(border=True):
+                        c_a, c_b = st.columns([4, 1])
+                        c_a.markdown(f"**📁 {data['name']}**")
+                        c_a.caption(f"{data['current_version']} • {data['commits'][0]['timestamp'][:10]}")
+                        
+                        if c_b.button("👁️", key=f"view_{did}"):
+                            st.session_state['selected_dataset_id'] = did
+                            st.rerun()
+
+            # --- COLUNA DA DIREITA: DETALHES DO DATASET SELECIONADO ---
+            with col_right:
+                selected_id = st.session_state.get('selected_dataset_id')
+                
+                if selected_id and selected_id in datasets:
+                    ds = datasets[selected_id]
+                    
+                    # Cabeçalho do Dataset
+                    head_c1, head_c2 = st.columns([3, 1])
+                    head_c1.title(ds['name'])
+                    head_c1.markdown(f"_{ds['description']}_")
+                    
+                    # Botão para Novo Commit (Upload de nova versão)
+                    with head_c2.popover("➕ Novo Commit"):
+                        st.markdown("**Atualizar Dados**")
+                        commit_msg = st.text_input("Mensagem do Commit", placeholder="Ex: Correção de valores Julho")
+                        new_file = st.file_uploader("Novo Ficheiro (CSV/Excel)", key="new_commit_file")
+                        
+                        if st.button("Commit Alterações"):
+                            if new_file and commit_msg:
+                                try:
+                                    if new_file.name.endswith('.csv'): df_new = pd.read_csv(new_file)
+                                    else: df_new = pd.read_excel(new_file)
+                                    
+                                    df_new = smart_clean_dataframe(df_new)
+                                    db.add_commit(selected_id, commit_msg, df_new)
+                                    st.success("Commit realizado! v++")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Erro: {e}")
+
+                    st.markdown("---")
+
+                    # Área de Visualização e Histórico
+                    t_view, t_history = st.tabs(["📊 Dados & Preview", "📜 Histórico de Commits"])
+                    
+                    with t_history:
+                        for commit in ds['commits']:
+                            with st.expander(f"📍 {commit['version']} - {commit['message']}"):
+                                st.caption(f"Autor: {commit['author']} em {commit['timestamp']}")
+                                if st.button("Restaurar esta versão (Visualizar)", key=f"rest_{commit['version']}"):
+                                    st.session_state['preview_version'] = commit['version']
+                                    st.rerun()
+
+                    with t_view:
+                        # Determina qual versão mostrar (a atual ou uma antiga selecionada)
+                        view_version = st.session_state.get('preview_version', ds['current_version'])
+                        
+                        st.info(f"A visualizar versão: **{view_version}**")
+                        
+                        df_view = db.get_dataset_version(selected_id, view_version)
+                        
+                        if df_view is not None:
+                            st.dataframe(df_view, use_container_width=True, height=400)
+                            
+                            # Botão para enviar para Análise IA
+                            if st.button(f"🧠 Analisar {view_version} com IA"):
+                                st.session_state['temp_df'] = df_view
+                                st.session_state['temp_files'] = [f"{ds['name']}_{view_version}.csv"]
+                                st.success("Dados carregados no cérebro da IA! Vai para a aba 'Análise IA'.")
+                        else:
+                            st.error("Erro ao carregar dados desta versão.")
+
+                else:
+                    st.info("👈 Selecione um dataset à esquerda para ver os detalhes.")
 
 
 # --- O NOVO CONTROLADOR PRINCIPAL ---
