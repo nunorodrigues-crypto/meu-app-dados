@@ -16,7 +16,8 @@ import uuid
 from datetime import datetime
 import requests
 import qrcode
-import urllib.parsefrom io import BytesIO
+import urllib.parse
+from io import BytesIO
 from streamlit_oauth import OAuth2Component
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
@@ -37,7 +38,7 @@ from sklearn.preprocessing import LabelEncoder
 
 # --- 1. CONFIGURAÇÃO GERAL ---
 st.set_page_config(
-    page_title="AInsight", 
+    page_title="AInsight Pro", 
     page_icon="👁️", 
     layout="wide",
     initial_sidebar_state="expanded"
@@ -1936,43 +1937,6 @@ def ext_get_dataset(db, ds_id):
 
 # --- 2. NOVAS PÁGINAS DE INTERFACE ---
 
-def page_login_register():
-    st.markdown("<h1 style='text-align: center;'>🔐 Acesso Seguro</h1>", unsafe_allow_html=True)
-    t1, t2 = st.tabs(["Entrar", "Criar Conta Nova"])
-    
-    with t1:
-        with st.form("login_v2"):
-            u = st.text_input("Utilizador")
-            p = st.text_input("Password", type="password")
-            if st.form_submit_button("Entrar"):
-                db = HistoryManager()
-                # Verifica se é user antigo (sem password) ou novo (com hash)
-                user_data = db.full_db["users"].get(u)
-                
-                valid = False
-                if user_data:
-                    stored_pass = user_data.get("password")
-                    if not stored_pass: valid = True # Permite users antigos entrarem
-                    elif stored_pass == ext_hash_pass(p): valid = True
-                
-                # Admin backdoor
-                if (u == "admin" and p == "123") or valid:
-                    st.session_state['authenticated'] = True
-                    st.session_state['username'] = u
-                    st.rerun()
-                else:
-                    st.error("Credenciais inválidas.")
-
-    with t2:
-        with st.form("register_v2"):
-            new_u = st.text_input("Novo Utilizador")
-            new_mail = st.text_input("Email")
-            new_p = st.text_input("Password", type="password")
-            if st.form_submit_button("Registar-se"):
-                db = HistoryManager()
-                ok, msg = ext_register_user(db, new_u, new_p, new_mail)
-                if ok: st.success(msg)
-                else: st.error(msg)
 
 def page_data_hub_ui(db):
     st.title("🧬 Data Hub (Gestão de Versões)")
@@ -2141,7 +2105,3 @@ def main_extended():
             st.code(e)
         if st.button("Recarregar"):
             st.rerun()
-
-# Ponto de Entrada
-if __name__ == "__main__":
-    main_extended()
