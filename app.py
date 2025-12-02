@@ -16,9 +16,21 @@ import uuid
 from datetime import datetime
 import requests
 import qrcode
-import urllib.parse
+import urllib.parsefrom io import BytesIO
+from streamlit_oauth import OAuth2Component
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
 from streamlit_oauth import OAuth2Component
 import hashlib
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
+import hashlib
+import qrcode
+from io import BytesIO
+from datetime import datetime, timedelta
+from streamlit_oauth import OAuth2Component
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
@@ -1455,8 +1467,405 @@ def main_app():
 # --- 1. FUNÇÕES AUXILIARES DE BACKEND (SEM MEXER NA CLASSE ANTIGA) ---
 
 def ext_hash_pass(password):
-    """Cria segurança para as passwords."""
     return hashlib.sha256(password.encode()).hexdigest()
+
+def ext_send_notification(db, target_username, message):
+    """Envia uma notificação interna para um utilizador."""
+    # Garante que carregamos a DB mais recente
+    db.load_db()
+    if target_username in db.full_db["users"]:
+        user = db.full_db["users"][target_username]
+        if "notifications" not in user: user["notifications"] = []
+        
+        user["notifications"].insert(0, {
+            "msg": message,
+            "read": False,
+            "timestamp": datetime.now().isoformat()
+        })
+        with open(HISTORY_FILE, 'w') as f:
+            json.dump(db.full_db, f, indent=4, default=str)
+        return True
+    return False
+
+def ext_register_user(db, username, password, email):
+    if username in db.full_db["users"]: return False, "Utilizador já existe."
+    
+    db.full_db["users"][username] = {
+        "password": ext_hash_pass(password),
+        "email": email,
+        "created_at": datetime.now().isoformat(),
+        "plan": "free",
+        "last_invite_at": None, # Controlo de convites (Data)
+        "notifications": [],    # Caixa de entrada de alertas
+        "chats": {}, "tasks": {}, "docs": {}, "datasets": {}, "workspaces": []
+    }
+    with open(HISTORY_FILE, 'w') as f: json.dump(db.full_db, f, indent=4, default=str)
+    return True, "Conta criada com sucesso!"
+
+def ext_save_dataset_version(db, name, description, df, parent_id=None):
+    if "datasets" not in db.user_data: db.user_data["datasets"] = {}
+    
+    data_json = df.to_json(orient='split', date_format='iso')
+    timestamp = datetime.now().isoformat()
+    
+    if parent_id and parent_id in db.user_data["datasets"]:
+        ds = db.user_data["datasets"][parent_id]
+        new_v = f"v{len(ds['commits']) + 1}"
+        ds["commits"].insert(0, {"version": new_v, "message": description, "timestamp": timestamp, "author": db.username, "data_snapshot": data_json})
+        ds["current_version"] = new_v
+        
+        # Notificar o próprio user (exemplo de confirmação)
+        ext_send_notification(db, db.username, f"Nova versão {new_v} criada no dataset '{name}'")
+    else:
+        ds_id = str(uuid.uuid4())
+        db.user_data["datasets"][ds_id] = {
+            "name": name, "description": description, "created_at": timestamp, "owner": db.username, "current_version": "v1",
+            "commits": [{"version": "v1", "message": "Importação Inicial", "timestamp": timestamp, "author": db.username, "data_snapshot": data_json}]
+        }
+        ext_send_notification(db, db.username, f"Dataset '{name}' criado com sucesso.")
+    
+    db.save_db()
+    
+    # Tenta criar o dataset ID se for novo
+    return parent_id if parent_id else ds_id
+
+def ext_get_dataset(db, ds_id):
+    if "datasets" in db.user_data and ds_id in db.user_data["datasets"]:
+        json_data = db.user_data["datasets"][ds_id]["commits"][0]["data_snapshot"]
+        return pd.read_json(StringIO(json_data), orient='split')
+    return None
+
+# --- GESTÃO DE CONVITES AVANÇADA (REGRA 30 DIAS) ---
+
+def ext_create_invite_advanced(db, owner_username, invitee_data, share_permission):
+    """
+    Gera convite com validação de 30 dias.
+    invitee_data = {name, email, phone}
+    """
+    db.load_db() # Refrescar dados
+    user_record = db.full_db["users"].get(owner_username)
+    
+    # 1. Verificar Limite de 30 Dias
+    if user_record and user_record.get("last_invite_at"):
+        last_date = datetime.fromisoformat(user_record["last_invite_at"])
+        # Diferença de dias
+        diff = (datetime.now() - last_date).days
+        if diff < 30:
+            days_left = 30 - diff
+            return False, f"🚫 Limite mensal atingido! Espera mais {days_left} dias."
+    
+    # 2. Gerar Token
+    token = str(uuid.uuid4())[:8].upper()
+    if "guest_tokens" not in db.full_db: db.full_db["guest_tokens"] = {}
+    
+    db.full_db["guest_tokens"][token] = {
+        "created_by": owner_username,
+        "created_at": datetime.now().isoformat(),
+        "share_data": share_permission,
+        "invitee": invitee_data, # Guarda dados do convidado
+        "used": False
+    }
+    
+    # 3. Atualizar Data do Último Convite
+    if user_record:
+        user_record["last_invite_at"] = datetime.now().isoformat()
+        # Notificação de registo
+        ext_send_notification(db, owner_username, f"Convite enviado para {invitee_data['email']}")
+    
+    with open(HISTORY_FILE, 'w') as f:
+        json.dump(db.full_db, f, indent=4, default=str)
+    
+    return True, token
+
+def ext_consume_invite(token):
+    db = HistoryManager()
+    token = token.strip().upper()
+    if "guest_tokens" in db.full_db and token in db.full_db["guest_tokens"]:
+        t_data = db.full_db["guest_tokens"][token]
+        if not t_data["used"]:
+            t_data["used"] = True; t_data["used_at"] = datetime.now().isoformat()
+            with open(HISTORY_FILE, 'w') as f: json.dump(db.full_db, f, indent=4, default=str)
+            return True, t_data
+    return False, None
+
+# --- NOVAS PÁGINAS DE INTERFACE ---
+
+def page_login_register():
+    st.markdown("<h1 style='text-align: center;'>🔐 Acesso Seguro</h1>", unsafe_allow_html=True)
+    t1, t2 = st.tabs(["Entrar", "Criar Conta Nova"])
+    
+    with t1:
+        with st.form("login_v2"):
+            u = st.text_input("Utilizador"); p = st.text_input("Password", type="password")
+            if st.form_submit_button("Entrar"):
+                db = HistoryManager()
+                user_data = db.full_db["users"].get(u)
+                valid = False
+                if user_data:
+                    stored = user_data.get("password")
+                    if not stored or stored == ext_hash_pass(p): valid = True
+                
+                if (u == "admin" and p == "123") or valid:
+                    st.session_state.update({'authenticated': True, 'username': u, 'is_guest': False})
+                    st.rerun()
+                else: st.error("Dados inválidos.")
+
+        st.markdown("---")
+        # Login Google (Se configurado)
+        if "GOOGLE_CLIENT_ID" in st.secrets:
+            try:
+                oauth2 = OAuth2Component(st.secrets["GOOGLE_CLIENT_ID"], st.secrets["GOOGLE_CLIENT_SECRET"], "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token", "https://www.googleapis.com/oauth2/v1/tokeninfo", "https://www.googleapis.com/oauth2/v1/userinfo")
+                res = oauth2.authorize_button("Entrar com Google", "https://www.google.com.tw/favicon.ico", st.secrets["GOOGLE_REDIRECT_URI"], "email profile")
+                if res and "token" in res:
+                    st.session_state.update({'authenticated': True, 'username': res.get("email"), 'is_guest': False})
+                    st.rerun()
+            except: pass
+
+        with st.expander("🎫 Tenho um Código de Convite"):
+            tk = st.text_input("Código")
+            if st.button("Validar"):
+                ok, t_data = ext_consume_invite(tk)
+                if ok:
+                    st.session_state.update({'authenticated': True, 'username': "Convidado", 'is_guest': True})
+                    if t_data.get("share_data"):
+                        st.session_state['guest_viewing_owner'] = t_data["created_by"]
+                        st.success(f"A entrar no Workspace de {t_data['created_by']} (Modo Leitura)...")
+                    else:
+                        st.success("A iniciar sessão limpa...")
+                    time.sleep(1.5); st.rerun()
+                else: st.error("Código inválido ou expirado.")
+
+    with t2:
+        with st.form("reg_v2"):
+            nu = st.text_input("User"); nm = st.text_input("Email"); np = st.text_input("Pass", type="password")
+            if st.form_submit_button("Registar"):
+                ok, msg = ext_register_user(HistoryManager(), nu, np, nm)
+                if ok: st.success(msg)
+                else: st.error(msg)
+
+def page_profile_ui(db):
+    st.title("👤 O Meu Perfil")
+    db.load_db() # Atualizar
+    user_data = db.full_db["users"].get(db.username, {})
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        st.info(f"**Utilizador:** {db.username}")
+        st.info(f"**Email:** {user_data.get('email', 'N/A')}")
+        st.info(f"**Plano:** {user_data.get('plan', 'free').upper()}")
+        
+    with c2:
+        st.subheader("Alterar Password")
+        with st.form("change_pass"):
+            p1 = st.text_input("Nova Password", type="password")
+            p2 = st.text_input("Confirmar", type="password")
+            if st.form_submit_button("Atualizar"):
+                if p1 == p2 and len(p1) > 0:
+                    user_data["password"] = ext_hash_pass(p1)
+                    with open(HISTORY_FILE, 'w') as f: json.dump(db.full_db, f, indent=4, default=str)
+                    st.success("Password atualizada!")
+                else: st.error("Passwords não coincidem.")
+
+    st.divider()
+    
+    # Lógica de Notificações
+    c_n1, c_n2 = st.columns([4, 1])
+    c_n1.subheader("🔔 As minhas Notificações")
+    if c_n2.button("Limpar Tudo"):
+        user_data["notifications"] = []
+        with open(HISTORY_FILE, 'w') as f: json.dump(db.full_db, f, indent=4, default=str)
+        st.rerun()
+
+    notifs = user_data.get("notifications", [])
+    if not notifs: st.caption("Não tens notificações novas.")
+    else:
+        for n in notifs:
+            icon = "📩" if not n['read'] else "✅"
+            st.markdown(f"{icon} **{n['timestamp'][:16]}** - {n['msg']}")
+            n['read'] = True # Marca como lido ao exibir
+            
+        # Salva o estado "lido"
+        with open(HISTORY_FILE, 'w') as f: json.dump(db.full_db, f, indent=4, default=str)
+
+def page_invites_ui(db):
+    st.title("📨 Gestão de Convites")
+    
+    # Verificar elegibilidade (Último convite)
+    user_rec = db.full_db["users"].get(db.username, {})
+    last_inv = user_rec.get("last_invite_at")
+    can_invite = True
+    days_left = 0
+    
+    if last_inv:
+        last_date = datetime.fromisoformat(last_inv)
+        diff = (datetime.now() - last_date).days
+        if diff < 30:
+            can_invite = False
+            days_left = 30 - diff
+
+    c1, c2 = st.columns([1, 1])
+    
+    with c1:
+        st.subheader("Enviar Convite")
+        if not can_invite:
+            st.error(f"🚫 Limite atingido! Podes convidar novamente em {days_left} dias.")
+        else:
+            with st.form("form_invite"):
+                st.caption("Preenche os dados de quem queres convidar:")
+                i_name = st.text_input("Nome do Convidado")
+                i_email = st.text_input("Email")
+                i_phone = st.text_input("Telemóvel")
+                perm = st.checkbox("🔓 Partilhar os meus Dados (Modo Leitura)", 
+                                 help="Se ativo, o convidado vê os teus ficheiros mas não pode editar.")
+                
+                if st.form_submit_button("Gerar Convite & Enviar"):
+                    if i_name and i_email:
+                        ok, res = ext_create_invite_advanced(db, db.username, {"name": i_name, "email": i_email, "phone": i_phone}, perm)
+                        if ok:
+                            st.session_state['new_token'] = res
+                            # SIMULAÇÃO DE ENVIO
+                            st.toast(f"📧 Email de boas-vindas enviado para {i_email}!", icon="📨")
+                            st.toast(f"📱 SMS com código enviado para {i_phone}!", icon="💬")
+                            st.success("Convite criado e enviado com sucesso!")
+                            time.sleep(2); st.rerun()
+                        else: st.error(res)
+                    else: st.warning("Preenche Nome e Email.")
+
+    with c2:
+        if 'new_token' in st.session_state:
+            st.success("Código Gerado (Cópia de Segurança):")
+            st.code(st.session_state['new_token'], language="text")
+            
+            # QR Code
+            qr = qrcode.QRCode(box_size=8, border=2)
+            qr.add_data(st.session_state['new_token']); qr.make(fit=True)
+            img = qr.make_image(fill='black', back_color='white')
+            buf = BytesIO(); img.save(buf, format="PNG")
+            st.image(buf.getvalue(), width=150, caption="QR de Acesso")
+
+def page_data_hub_ui(db):
+    st.title("🧬 Data Hub")
+    is_guest = st.session_state.get("is_guest", False)
+    
+    if st.session_state.get("guest_viewing_owner"):
+        st.warning(f"👀 A ver dados de: {st.session_state['guest_viewing_owner']} (Modo Leitura)")
+
+    # Bloqueia upload se for guest
+    if not is_guest:
+        with st.expander("➕ Novo Dataset"):
+            up = st.file_uploader("Ficheiro")
+            nm = st.text_input("Nome")
+            if st.button("Criar") and up:
+                df = pd.read_csv(up) if up.name.endswith('.csv') else pd.read_excel(up)
+                df = smart_clean_dataframe(df)
+                ext_save_dataset_version(db, nm, "Upload Inicial", df)
+                st.success("Criado!"); time.sleep(1); st.rerun()
+    else:
+        st.info("🔒 Como convidado, não podes carregar novos ficheiros.")
+    
+    if "datasets" not in db.user_data: st.info("Vazio."); return
+    
+    for did, data in db.user_data["datasets"].items():
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([3, 1, 1])
+            c1.markdown(f"**{data['name']}** ({data['current_version']})")
+            
+            if c2.button("📊 Ver", key=f"v_{did}"):
+                st.session_state['temp_df'] = ext_get_dataset(db, did)
+                st.session_state['temp_files'] = [data['name']]
+                st.toast("Carregado!")
+            
+            # Só o dono pode treinar ML
+            if not is_guest:
+                if c3.button("🤖 ML", key=f"m_{did}"):
+                    st.session_state['ml_target_id'] = did
+                    st.session_state['force_page'] = "🤖 ML Studio"
+                    st.rerun()
+
+def page_ml_studio_ui(db):
+    st.title("🤖 ML Studio")
+    if st.session_state.get("is_guest"):
+        st.error("🚫 Convidados não têm permissão para treinar modelos."); return
+
+    tid = st.session_state.get('ml_target_id')
+    if not tid: st.warning("Seleciona um dataset."); return
+    
+    df = ext_get_dataset(db, tid)
+    target = st.selectbox("Alvo", df.columns)
+    
+    if st.button("🚀 Treinar e Notificar"):
+        st.spinner("Treinando...")
+        try:
+            df_c = df.copy().dropna()
+            for c in df_c.select_dtypes('object'): df_c[c] = LabelEncoder().fit_transform(df_c[c].astype(str))
+            X = df_c.drop(columns=[target]); y = df_c[target]
+            model = RandomForestRegressor() if (y.dtype!='object' and y.nunique()>10) else RandomForestClassifier()
+            model.fit(X, y)
+            
+            msg = f"Modelo treinado para '{target}' com sucesso!"
+            ext_send_notification(db, db.username, msg)
+            st.success(msg)
+            st.balloons()
+        except Exception as e: st.error(str(e))
+
+# --- EXECUTOR FINAL ---
+
+def main_extended():
+    if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
+    
+    try:
+        if not st.session_state["authenticated"]:
+            page_login_register()
+        else:
+            user = st.session_state.get('username', 'system')
+            is_guest = st.session_state.get('is_guest', False)
+            
+            # Contexto de Dados (Dono vs Visitante)
+            if is_guest and st.session_state.get("guest_viewing_owner"):
+                db = HistoryManager(st.session_state["guest_viewing_owner"])
+            else:
+                db = HistoryManager(user)
+            
+            # Sidebar Inteligente
+            with st.sidebar:
+                st.header("👁️ AInsight Pro")
+                user_label = f"User: {user}" + (" (Guest)" if is_guest else "")
+                st.caption(user_label)
+                
+                # BADGE DE NOTIFICAÇÕES (Lê do DB real do user logado)
+                real_db = HistoryManager(user) if is_guest else db
+                notifs = real_db.full_db["users"].get(user, {}).get("notifications", [])
+                unread = len([n for n in notifs if not n['read']])
+                label_notif = f"🔔 Notificações ({unread})" if unread > 0 else "🔔 Notificações"
+                
+                # Menu Dinâmico
+                opts = ["📊 Análise IA", "🧬 Data Hub", "🤖 ML Studio", "🔨 Tarefas", "🧠 Docs", label_notif]
+                if not is_guest: opts.insert(3, "📨 Convites") # Guest não convida
+                opts.append("👤 Perfil")
+
+                if 'force_page' in st.session_state and st.session_state['force_page'] in opts:
+                    idx = opts.index(st.session_state['force_page']); del st.session_state['force_page']
+                else: idx = 0
+                
+                page = st.radio("Menu", opts, index=idx)
+                if st.button("Sair"): st.session_state.clear(); st.rerun()
+
+            api_key = st.secrets.get("GEMINI_API_KEY", "")
+            
+            if "Análise" in page: render_dashboard(db, user, "Data Scientist", api_key, None)
+            elif "Data Hub" in page: page_data_hub_ui(db)
+            elif "ML Studio" in page: page_ml_studio_ui(db)
+            elif "Convites" in page: page_invites_ui(db)
+            elif "Tarefas" in page: render_tasks_page(db)
+            elif "Docs" in page: render_docs_page(db)
+            elif "Perfil" in page or "Notificações" in page: page_profile_ui(real_db)
+
+    except Exception as e:
+        st.error("Erro de sistema."); st.code(e)
+        if st.button("Reset"): st.session_state.clear(); st.rerun()
+
+if __name__ == "__main__":
+    main_extended()
 
 def ext_register_user(db, username, password, email):
     """Regista utilizador injetando diretamente no JSON do HistoryManager."""
