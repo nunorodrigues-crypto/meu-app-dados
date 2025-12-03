@@ -154,14 +154,17 @@ def load_db(self):
             # Garante chaves
             for k in ["notifications", "datasets", "docs", "tasks"]:
                 if k not in self.user_data: self.user_data[k] = [] if k == "notifications" else {}
-
-    def save_db(self):
-        if self.username in self.full_db["users"]:
-            self.full_db["users"][self.username] = self.user_data
-            with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
+def save_db(self):
+    """
+    Saves the current user's data to the database file.
+    Updates the user's record in the full database and writes the changes to HISTORY_FILE.
+    """
+    if self.username in self.full_db["users"]:
+        self.full_db["users"][self.username] = self.user_data
+        with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
 
     # --- MÉTODOS DE DADOS ---
-    def create_task(self, title, description="", priority="Média", assignee=None):
+def create_task(self, title, description="", priority="Média", assignee=None):
         task_id = str(uuid.uuid4())
         if "tasks" not in self.user_data: self.user_data["tasks"] = {}
         self.user_data["tasks"][task_id] = {
@@ -171,47 +174,49 @@ def load_db(self):
         self.save_db()
         return task_id
 
-    def move_task(self, task_id, new_status):
+def move_task(self, task_id, new_status):
         if task_id in self.user_data.get("tasks", {}):
             self.user_data["tasks"][task_id]["status"] = new_status
             self.save_db()
 
-    def delete_task(self, task_id):
+def delete_task(self, task_id):
         if task_id in self.user_data.get("tasks", {}):
             del self.user_data["tasks"][task_id]
             self.save_db()
 
-    def create_doc(self, title, content="# Novo Doc"):
+def create_doc(self, title, content="# Novo Doc"):
         doc_id = str(uuid.uuid4())
         if "docs" not in self.user_data: self.user_data["docs"] = {}
         self.user_data["docs"][doc_id] = {"title": title, "content": content, "updated_at": datetime.now().isoformat()}
         self.save_db()
         return doc_id
 
-    def update_doc(self, doc_id, content):
+def update_doc(self, doc_id, content):
         if doc_id in self.user_data.get("docs", {}):
             self.user_data["docs"][doc_id]["content"] = content
             self.user_data["docs"][doc_id]["updated_at"] = datetime.now().isoformat()
             self.save_db()
 
-    def delete_doc(self, doc_id):
+def delete_doc(self, doc_id):
         if doc_id in self.user_data.get("docs", {}):
             del self.user_data["docs"][doc_id]
             self.save_db()
 
-    def save_dataset_version(self, name, df):
+def save_dataset_version(self, name, df):
         if "datasets" not in self.user_data: self.user_data["datasets"] = {}
         # Garante nome único simples
         did = str(uuid.uuid4())
         djson = df.to_json(orient='split', date_format='iso')
         
         self.user_data["datasets"][did] = {
-            "name": name, 
+            "name": name,
             "current_version": "v1",
             "commits": [{"version": "v1", "msg": "Init", "ts": datetime.now().isoformat(), "data": djson}]
+        }
+        self.save_db()
+        return did
 
 # --- 3. FUNÇÕES UTILITÁRIAS ---
-
 def ext_hash_pass(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
