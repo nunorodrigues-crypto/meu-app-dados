@@ -31,6 +31,100 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# --- 2. MOTOR DE DADOS UNIVERSAL (A "BLINDAGEM") ---
+
+def clean_money_universal(val):
+    """
+    O Exterminador de Formatos de Moeda.
+    Converte: "1.200,50 €", "R$ 1,200.50", "1 000$" -> float puro.
+    """
+    if pd.isna(val) or val == '': return 0.0
+    s = str(val).strip()
+    
+    # 1. Manter apenas números, pontos, vírgulas e sinal negativo
+    s_clean = re.sub(r'[^\d.,-]', '', s)
+    if not s_clean: return 0.0
+    
+    try:
+        # 2. Detetar formato (Europeu vs Americano)
+        if ',' in s_clean and '.' in s_clean:
+            # Se a vírgula vier depois do ponto (1.200,50) -> Europeu
+            if s_clean.rfind(',') > s_clean.rfind('.'):
+                s_clean = s_clean.replace('.', '').replace(',', '.')
+            else: # Americano (1,200.50)
+                s_clean = s_clean.replace(',', '')
+        elif ',' in s_clean:
+            # Só vírgula (1200,50) -> Assume decimal
+            s_clean = s_clean.replace(',', '.')
+            
+        return float(s_clean)
+    except:
+        return 0.0
+
+def load_universal_file(uploaded_file):
+    """
+    Lê qualquer ficheiro (CSV/Excel) independentemente da origem,
+    língua ou separador (; ou ,).
+    """
+    try:
+        # A. Se for Excel
+        if uploaded_file.name.endswith('.xlsx') or uploaded_file.name.endswith('.xls'):
+            return pd.read_excel(uploaded_file)
+        
+        # B. Se for CSV (O mais difícil)
+        # Tenta várias codificações (UTF-8, Latin-1 para Windows antigo, etc.)
+        encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
+        
+        for enc in encodings:
+            try:
+                uploaded_file.seek(0)
+                # 'sep=None' obriga o Python a "cheirar" o separador (auto-detect)
+                return pd.read_csv(uploaded_file, sep=None, engine='python', encoding=enc)
+            except:
+                continue # Tenta o próximo
+                
+        return None # Falhou tudo
+    except Exception as e:
+        return None
+
+def smart_clean_dataframe(df):
+    """
+    Limpa o Dataframe final para a IA não se baralhar.
+    """
+    # 1. Estrutura: Apaga linhas/colunas totalmente vazias
+    df.dropna(how='all', inplace=True)
+    df.dropna(how='all', axis=1, inplace=True)
+    
+   # Se detetar colunas chamadas "Unnamed", assume que o cabeçalho está na linha errada
+    if len(df) > 1 and any("Unnamed" in str(c) for c in df.columns):
+        row_0 = df.iloc[0]
+        # Se a primeira linha tiver dados reais, promove-a a cabeçalho
+        if row_0.notna().sum() > (len(df.columns) / 2):
+            df.columns = row_0
+            df = df.iloc[1:].reset_index(drop=True)
+
+    # 3. Conversão de Tipos (Inteligente)
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            # A. Tenta converter Dinheiro/Números
+            try:
+                # Verifica numa amostra se parece dinheiro
+                sample = df[col].astype(str).head().tolist()
+                if any(re.search(r'\d', x) for x in sample):
+                    # Tenta converter
+                    temp_col = df[col].apply(clean_money_universal)
+                    # Se a maioria não for zero, aceita a conversão
+                    if (temp_col != 0).sum() > 0:
+                        df[col] = temp_col
+                        continue
+            except: pass
+
+            # B. Tenta converter Datas
+            try: df[col] = pd.to_datetime(df[col]); continue
+            except: pass
+            
+    return df
+
 # --- 2. GESTOR DE BASE DE DADOS (JSON) ---
 HISTORY_FILE = "chat_database.json"
 
@@ -39,37 +133,32 @@ class HistoryManager:
         self.username = username
         self.load_db()
 
-    def load_db(self):
+def load_db(self):
         if not os.path.exists(HISTORY_FILE):
-            init_db = {"users": {}, "guest_tokens": {}, "workspaces": {}}
-            with open(HISTORY_FILE, 'w') as f: json.dump(init_db, f)
-        
+            with open(HISTORY_FILE, 'w') as f: json.dump({"users": {}, "guest_tokens": {}, "workspaces": {}}, f)
         try:
             with open(HISTORY_FILE, 'r') as f: self.full_db = json.load(f)
-        except:
-            self.full_db = {"users": {}, "guest_tokens": {}, "workspaces": {}}
-
-        for d in ["workspaces", "guest_tokens", "users"]:
-            if d not in self.full_db: self.full_db[d] = {}
+        except: self.full_db = {"users": {}, "guest_tokens": {}, "workspaces": {}}
         
+        # Integridade
+        for k in ["users", "guest_tokens", "workspaces"]: 
+            if k not in self.full_db: self.full_db[k] = {}
+
         if self.username not in self.full_db["users"]:
             self.user_data = {
                 "chats": {}, "tasks": {}, "docs": {}, "datasets": {}, 
-                "plan": "free", "workspaces": [], "notifications": [], "last_invite_at": None
+                "plan": "free", "notifications": [], "last_invite_at": None
             }
         else:
             self.user_data = self.full_db["users"][self.username]
-            defaults = {"notifications": [], "last_invite_at": None, "chats": {}, "tasks": {}, "docs": {}, "datasets": {}}
-            for k, v in defaults.items():
-                if k not in self.user_data: self.user_data[k] = v
-
-        self.user_chats = self.user_data.get("chats", {})
+            # Garante chaves
+            for k in ["notifications", "datasets", "docs", "tasks"]:
+                if k not in self.user_data: self.user_data[k] = [] if k == "notifications" else {}
 
     def save_db(self):
         if self.username in self.full_db["users"]:
             self.full_db["users"][self.username] = self.user_data
-            with open(HISTORY_FILE, 'w') as f:
-                json.dump(self.full_db, f, indent=4, default=str)
+            with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
 
     # --- MÉTODOS DE DADOS ---
     def create_task(self, title, description="", priority="Média", assignee=None):
@@ -109,6 +198,17 @@ class HistoryManager:
         if doc_id in self.user_data.get("docs", {}):
             del self.user_data["docs"][doc_id]
             self.save_db()
+
+    def save_dataset_version(self, name, df):
+        if "datasets" not in self.user_data: self.user_data["datasets"] = {}
+        # Garante nome único simples
+        did = str(uuid.uuid4())
+        djson = df.to_json(orient='split', date_format='iso')
+        
+        self.user_data["datasets"][did] = {
+            "name": name, 
+            "current_version": "v1",
+            "commits": [{"version": "v1", "msg": "Init", "ts": datetime.now().isoformat(), "data": djson}]
 
 # --- 3. FUNÇÕES UTILITÁRIAS ---
 
@@ -204,10 +304,9 @@ def smart_clean_dataframe(df):
 
 # --- 4. CÉREBRO IA (CORRIGIDO PARA ARGUMENTOS FLEXÍVEIS E MODELO AUTOMÁTICO) ---
 
-def ask_gemini(df, query, api_key, persona, *args, **kwargs):
+def ask_gemini(df, query, api_key, persona):
     genai.configure(api_key=api_key)
-    
-    # Auto-Deteção de Modelo (Resolve Erro 404)
+    # Modelo dinâmico para evitar erro 404
     chosen_model = "gemini-pro"
     try:
         for m in genai.list_models():
@@ -216,40 +315,42 @@ def ask_gemini(df, query, api_key, persona, *args, **kwargs):
                 elif '1.5-pro' in m.name: chosen_model = m.name
     except: pass
 
-    p_text = f"Atue como {persona}. Analise o dataframe."
-    cols = "\n".join([f"- {c} ({t})" for c, t in df.dtypes.items()])
+    # Resumo para a IA não ler tudo (poupa tokens e evita erros)
+    summary = df.describe(include='all').to_string()
     
     prompt = f"""
-    {p_text}
-    DADOS (df): {cols}
+    Atue como {persona}.
+    RESUMO DOS DADOS:
+    {summary}
+    
     PERGUNTA: "{query}"
+    
     REGRAS:
-    1. O df já existe. NÃO uses pd.read_csv.
-    2. Responde APENAS com código Python em blocos ```python```.
-    3. Importa: import pandas as pd; import matplotlib.pyplot as plt; import seaborn as sns
+    1. Responda SÓ com código Python em blocos ```python```.
+    2. O dataframe chama-se 'df'. NÃO uses pd.read_csv.
+    3. Importa pandas, matplotlib.pyplot, seaborn.
     4. Gráficos: plt.figure(figsize=(10,6)).
-    5. NÃO uses o argumento 'datetime_is_numeric' no describe(), ele foi removido do pandas.
+    5. NÃO uses 'datetime_is_numeric'.
     """
     try:
         model = genai.GenerativeModel(chosen_model)
         res = model.generate_content(prompt)
         match = re.search(r"```python(.*?)```", res.text, re.DOTALL)
         return match.group(1).strip() if match else res.text.replace("```", "").strip()
-    except Exception as e:
-        return f"print('Erro IA ({chosen_model}): {e}')"
+    except Exception as e: return f"print('Erro IA: {e}')"
 
 def execute_code(code, df):
     try:
-        old_stdout = sys.stdout
-        redirected_output = sys.stdout = StringIO()
-        local_vars = {'df': df, 'pd': pd, 'plt': plt, 'sns': sns, 'np': np}
-        exec(code, {}, local_vars)
-        sys.stdout = old_stdout
-        text_out = redirected_output.getvalue()
+        # Limpeza preventiva de erros comuns
+        code = code.replace(", datetime_is_numeric=True", "")
+        
+        old = sys.stdout; sys.stdout = StringIO()
+        exec(code, {}, {'df': df, 'pd': pd, 'plt': plt, 'sns': sns, 'np': np})
+        out = sys.stdout.getvalue(); sys.stdout = old
         fig = plt.gcf()
         if not plt.gca().has_data(): fig = None
-        else: plt.clf() 
-        return text_out, fig
+        else: plt.clf()
+        return out, fig
     except Exception as e:
         sys.stdout = sys.__stdout__
         return f"Erro Código: {e}", None
@@ -430,14 +531,13 @@ def render_data_hub(db):
             
             # --- CORREÇÃO AQUI ---
             if c2.button("📊 Analisar", key=f"v_{did}"):
-                # Carrega dados
+                # 1. Carrega os dados do disco para a memória
                 st.session_state['temp_df'] = ext_get_dataset(db, did)
-                st.session_state['temp_files'] = [data['name']]
                 
-                # FORÇA O SALTO PARA A PÁGINA DE ANÁLISE
-                st.session_state['force_page'] = "📊 Análise IA"
-                st.toast("A saltar para Análise...")
-                time.sleep(0.5)
+                # 2. Avisa o sistema para mudar de página
+                st.session_state['force_page'] = "📊 Análise IA" 
+                
+                # 3. Força o recarregamento imediato
                 st.rerun()
             
             if not is_guest and c3.button("🤖 ML", key=f"m_{did}"):
@@ -466,105 +566,6 @@ def render_ml_page(db):
             st.success(msg)
         except Exception as e: st.error(str(e))
 
-def render_dashboard_classic(db, user, api_key):
-    st.title("📊 Análise IA")
-    
-    # 1. PERSONAS E CONFIGURAÇÃO
-    c1, c2 = st.columns([3, 1])
-    with c2:
-        persona = st.selectbox("Persona", ["Data Scientist", "CFO (Financeiro)", "CMO (Marketing)", "COO (Operacional)"])
-
-    # 2. VERIFICAÇÃO DE DADOS
-    if st.session_state.get('temp_df') is None:
-        st.info("⚠️ O Cérebro está vazio. Vai ao 'Data Hub' e clica em 'Ver' num ficheiro primeiro.")
-        return
-
-    with c1:
-        st.success(f"✅ Dados carregados: {len(st.session_state['temp_df'])} linhas")
-        
-        # --- BOTÃO MÁGICO ---
-        if st.button(f"🚀 Gerar Relatório ({persona})", type="primary"):
-            if not api_key: 
-                st.error("Falta API Key")
-            else:
-                with st.status("🔄 A processar inteligência...", expanded=True) as status:
-                    # A. Gerar Insights
-                    status.write("🧠 A pensar...")
-                    q, code = generate_role_insights(st.session_state['temp_df'], persona, api_key)
-                    
-                    # B. Executar Código (Gráficos)
-                    status.write("📊 A desenhar gráficos...")
-                    text_result, fig = execute_code(code, st.session_state['temp_df'])
-                    
-                    # C. GUARDAR NO HISTÓRICO (DOCS)
-                    status.write("💾 A arquivar nos Docs...")
-                    doc_title = f"Relatório {persona} - {datetime.now().strftime('%H:%M')}"
-                    doc_body = f"# {doc_title}\n\n## Insights\n{text_result}\n\n## Código Usado\n```python\n{code}\n```"
-                    db.create_doc(doc_title, doc_body)
-                    
-                    status.update(label="Concluído!", state="complete", expanded=False)
-
-                # D. MOSTRAR RESULTADOS NA TELA
-                st.divider()
-                st.markdown("### 📝 Relatório Gerado")
-                if text_result: st.markdown(text_result)
-                if fig: st.pyplot(fig)
-                
-                # E. GERAR E BAIXAR PDF
-                pdf = FPDF()
-                pdf.add_page()
-                pdf.set_font("Arial", size=12)
-                pdf.cell(200, 10, txt=f"AInsight Pro - {persona}", ln=1, align='C')
-                pdf.ln(10)
-                # Adiciona texto (limpeza básica de caracteres)
-                safe_text = text_result.encode('latin-1', 'replace').decode('latin-1')
-                pdf.multi_cell(0, 10, txt=safe_text)
-                
-                # Botão Download
-                st.download_button(
-                    label="📥 Baixar PDF",
-                    data=pdf.output(dest='S').encode('latin-1'),
-                    file_name=f"Relatorio_{persona}.pdf",
-                    mime="application/pdf"
-                )
-                
-                st.success(f"Cópia guardada automaticamente em 'Docs'!")
-
-    # 3. CHAT MANUAL (OPCIONAL)
-    if q := st.chat_input(f"Fazer pergunta específica ao {persona}..."):
-        if not api_key: st.error("Falta API Key")
-        else:
-            with st.spinner("A pensar..."):
-                code = ask_gemini(st.session_state['temp_df'], q, api_key, persona)
-                text, fig = execute_code(code, st.session_state['temp_df'])
-                if text: st.write(text)
-                if fig: st.pyplot(fig)
-
-def render_tasks_page_simple(db):
-    st.title("🔨 Tarefas")
-    with st.form("new_t"):
-        t = st.text_input("Tarefa")
-        if st.form_submit_button("Add"): 
-            db.create_task(t)
-            st.rerun()
-            
-    tasks = db.user_data.get("tasks", {})
-    for tid, tk in tasks.items():
-        st.write(f"- {tk['title']} ({tk['status']})")
-
-def render_docs_page_simple(db):
-    st.title("🧠 Docs")
-    with st.form("new_d"):
-        t = st.text_input("Titulo")
-        if st.form_submit_button("Criar"):
-            db.create_doc(t)
-            st.rerun()
-    docs = db.user_data.get("docs", {})
-    for did, d in docs.items():
-        st.write(f"📄 {d['title']}")
-
-# --- EXECUTOR PRINCIPAL ---
-
 def main():
     if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
     
@@ -574,12 +575,13 @@ def main():
         user = st.session_state.get('username', 'system')
         is_guest = st.session_state.get('is_guest', False)
         
-        # Carrega DB correta (Dono ou Partilhada)
+        # Carrega DB
         if is_guest and st.session_state.get("guest_viewing_owner"):
             db = HistoryManager(st.session_state["guest_viewing_owner"])
         else:
             db = HistoryManager(user)
             
+        # Notificações
         real_db = HistoryManager(user) if is_guest else db
         notifs = real_db.full_db["users"].get(user, {}).get("notifications", [])
         unread = len([n for n in notifs if not n['read']])
@@ -589,10 +591,14 @@ def main():
             st.header("AInsight Pro")
             st.caption(f"User: {user}")
             
-            opts = ["📊 Análise IA", "🧬 Data Hub", "🤖 ML Studio", "🔨 Tarefas", "🧠 Docs", label_n]
-            if not is_guest: opts.insert(3, "📨 Convites")
+            # --- MENU SIMPLIFICADO (SEM DATA HUB) ---
+            # Removemos "🧬 Data Hub" da lista
+            opts = ["📊 Análise IA", "🤖 ML Studio", "🔨 Tarefas", "🧠 Docs", label_n]
+            
+            if not is_guest: opts.insert(2, "📨 Convites") # Insere Convites na posição 2
             opts.append("👤 Perfil")
             
+            # Lógica de Redirecionamento
             if 'force_page' in st.session_state and st.session_state['force_page'] in opts:
                 idx = opts.index(st.session_state['force_page']); del st.session_state['force_page']
             else: idx = 0
@@ -602,8 +608,9 @@ def main():
             
         api_key = st.secrets.get("GEMINI_API_KEY", "")
         
+        # O Roteador já não precisa do Data Hub
         if "Análise" in page: render_dashboard_classic(db, user, api_key)
-        elif "Data Hub" in page: render_data_hub(db)
+        # elif "Data Hub" in page: render_data_hub(db)  <-- REMOVIDO
         elif "ML Studio" in page: render_ml_page(db)
         elif "Convites" in page: render_invites_page(db)
         elif "Tarefas" in page: render_tasks_page_simple(db)
