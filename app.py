@@ -106,6 +106,7 @@ def ask_gemini(df, query, key, persona):
         if any('flash' in m for m in models): chosen_model = next(m for m in models if 'flash' in m)
     except: pass
 
+    # Contexto reduzido
     summary = df.describe(include='all').to_string()
     
     prompt = f"""
@@ -113,17 +114,18 @@ def ask_gemini(df, query, key, persona):
     DADOS: {summary}
     PEDIDO: "{query}"
     
-    REGRAS TÉCNICAS ESTRITAS:
+    REGRAS TÉCNICAS ESTRITAS (PARA EVITAR ERROS DE CÓDIGO):
     1. O teu objetivo é APENAS gerar código Python.
-    2. O código deve ser simples e robusto.
+    2. **NÃO USES A BIBLIOTECA `locale`**. Para formatar dinheiro, usa f-strings simples (ex: `f"{{valor:,.2f}} €"`).
     3. NÃO uses `datetime_is_numeric`.
     4. Usa `print(f"## Título")` para texto.
     5. Usa `plt.figure(figsize=(10,6))` e `sns.barplot` ou `sns.lineplot`.
-    6. Garante que fechas todos os parêntesis e usas vírgulas corretamente.
-    7. O dataframe chama-se 'df'.
+    6. O dataframe chama-se 'df'.
+    7. Antes de qualquer gráfico, faz `plt.clf()` para limpar a memória.
     """
     try:
         model = genai.GenerativeModel(chosen_model)
+        # Temperature 0 para máxima precisão técnica
         res = model.generate_content(prompt, generation_config={"temperature": 0})
         match = re.search(r"```python(.*?)```", res.text, re.DOTALL)
         return match.group(1).strip() if match else res.text.replace("```", "").strip()
