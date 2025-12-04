@@ -82,15 +82,41 @@ class HistoryManager:
         }
         self.save_db()
     
-    def create_doc(self, title, content=""):
-        did = str(uuid.uuid4())
-        self.user_data["docs"][did] = {"title": title, "content": content, "ts": datetime.now().isoformat()}
+    def create_task(self, t, desc="", prio="Média", assignee=""):
+        tid = str(uuid.uuid4())
+        self.user_data["tasks"][tid] = {
+            "title": t, 
+            "description": desc, 
+            "priority": prio, 
+            "status": "To Do", 
+            "assignee": assignee,       # Novo: Quem vai fazer
+            "history": [],              # Novo: Histórico de conversa
+            "created_at": datetime.now().isoformat()
+        }
         self.save_db()
+
+    def add_task_comment(self, tid, msg):
+        """Adiciona um comentário ao histórico da tarefa."""
+        if tid in self.user_data["tasks"]:
+            # Garante que a lista existe (para tarefas antigas)
+            if "history" not in self.user_data["tasks"][tid]:
+                self.user_data["tasks"][tid]["history"] = []
+            
+            timestamp = datetime.now().strftime("%d/%m %H:%M")
+            self.user_data["tasks"][tid]["history"].append({
+                "user": self.username,
+                "msg": msg,
+                "ts": timestamp
+            })
+            self.save_db()
     
-    def create_task(self, t):
-        tid = str(uuid.uuid4()); self.user_data["tasks"][tid] = {"title": t, "status": "To Do"}
-        self.save_db()
-    
+    def move_task(self, tid, status):
+        if tid in self.user_data["tasks"]: 
+            self.user_data["tasks"][tid]["status"] = status
+            # Regista a mudança no histórico automaticamente
+            self.add_task_comment(tid, f"Mudou estado para: {status}")
+            self.save_db()
+            
     def delete_task(self, tid):
         if tid in self.user_data["tasks"]: del self.user_data["tasks"][tid]; self.save_db()
         
