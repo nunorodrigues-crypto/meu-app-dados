@@ -259,15 +259,81 @@ def ui_ml(db):
             st.success(f"Modelo treinado para {target}!")
         except Exception as e: st.error(str(e))
 
-def ui_others(db, page):
-    if page == "🔨 Tarefas":
-        st.title("Tarefas")
-        t = st.text_input("Nova Tarefa")
-        if st.button("Add"): db.create_task(t); st.rerun()
-        for k,v in db.user_data.get("tasks", {}).items():
-            c1,c2 = st.columns([4,1])
-            c1.write(f"- {v['title']}"); 
-            if c2.button("X", key=k): db.delete_task(k); st.rerun()
+def ui_tasks(db):
+    st.title("🔨 Quadro de Tarefas & Equipa")
+    
+    # 1. CRIAR NOVA TAREFA (Agora com campo para atribuir)
+    with st.expander("➕ Nova Tarefa", expanded=False):
+        with st.form("add_task"):
+            c1, c2 = st.columns([2, 1])
+            t = c1.text_input("Título da Tarefa")
+            assignee = c2.text_input("Atribuir a (Nome/Email)")
+            d = st.text_area("Descrição")
+            p = st.selectbox("Prioridade", ["Alta", "Média", "Baixa"])
+            
+            if st.form_submit_button("Criar Tarefa"):
+                if t:
+                    db.create_task(t, d, p, assignee)
+                    st.success("Tarefa criada!")
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.warning("O título é obrigatório.")
+    
+    st.divider()
+    
+    # 2. LISTAGEM (CARDS COM HISTÓRICO)
+    tasks = db.user_data.get("tasks", {})
+    if not tasks:
+        st.info("Não há tarefas pendentes.")
+        return
+
+    # Ordena: Alta prioridade primeiro
+    sorted_tasks = sorted(tasks.items(), key=lambda x: (x[1].get('priority') != 'Alta', x[1].get('created_at')), reverse=False)
+
+    for tid, task in sorted_tasks:
+        # Corzinha visual para prioridade
+        prio_icon = "🔥" if task.get('priority') == "Alta" else "📌"
+        
+        with st.container(border=True):
+            col_info, col_actions = st.columns([5, 1])
+            
+            # --- LADO ESQUERDO: INFORMAÇÃO ---
+            with col_info:
+                st.markdown(f"### {prio_icon} {task.get('title')}")
+                if task.get('description'): st.caption(task['description'])
+                
+                # Badges de quem é e estado
+                quem = task.get('assignee') if task.get('assignee') else "Sem dono"
+                estado = task.get('status', 'To Do')
+                st.markdown(f"👤 **{quem}** | Estado: `{estado}`")
+
+                # --- CHAT / HISTÓRICO DENTRO DA TAREFA ---
+                history = task.get('history', [])
+                with st.expander(f"💬 Comentários ({len(history)})"):
+                    # Mostra mensagens antigas
+                    for h in history:
+                        st.text(f"[{h['ts']}] {h['user']}: {h['msg']}")
+                    
+                    # Caixa para escrever nova mensagem
+                    c_txt, c_btn = st.columns([4, 1])
+                    new_msg = c_txt.text_input("Escrever...", key=f"txt_{tid}", label_visibility="collapsed")
+                    if c_btn.button("Enviar", key=f"btn_{tid}"):
+                        if new_msg:
+                            db.add_task_comment(tid, new_msg)
+                            st.rerun()
+
+            # --- LADO DIREITO: BOTÕES DE AÇÃO ---
+            with col_actions:
+                st.write("") # Espaçamento
+                if estado == "To Do":
+                    if st.button("▶️", key=f"start_{tid}", help="Iniciar"): db.move_task(tid, "Doing"); st.rerun()
+                elif estado == "Doing":
+                    if st.button("✅", key=f"done_{tid}", help="Concluir"): db.move_task(tid, "Feito"); st.rerun()
+                
+                if st.button("🗑️", key=f"del_{tid}", help="Apagar"):
+                    db.delete_task(tid)
+                    st.rerun()
             
     elif page == "🧠 Docs":
         st.title("Docs")
