@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timedelta
 import requests
 import qrcode
+import time
 import urllib.parse
 from streamlit_oauth import OAuth2Component
 import numpy as np
@@ -72,13 +73,22 @@ class HistoryManager:
         if self.username in self.full_db["users"]:
             self.full_db["users"][self.username] = self.user_data
             with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
-
     def save_dataset(self, name, df):
         did = str(uuid.uuid4())
         djson = df.to_json(orient='split', date_format='iso')
         self.user_data["datasets"][did] = {
             "name": name, "created_at": datetime.now().isoformat(),
             "commits": [{"version": "v1", "data": djson}]
+        }
+        self.save_db()
+    
+    def create_doc(self, title, content):
+        """Guarda um documento simples nos docs do utilizador."""
+        did = str(uuid.uuid4())
+        self.user_data["docs"][did] = {
+            "title": title,
+            "content": content,
+            "created_at": datetime.now().isoformat()
         }
         self.save_db()
     
@@ -93,6 +103,7 @@ class HistoryManager:
             "history": [],              # Novo: Histórico de conversa
             "created_at": datetime.now().isoformat()
         }
+        self.save_db()
         self.save_db()
 
     def add_task_comment(self, tid, msg):
@@ -248,17 +259,6 @@ def ui_ml(db):
     st.title("🤖 ML Studio")
     if 'active_df' not in st.session_state: st.warning("Carrega ficheiro na Análise IA primeiro."); return
     df = st.session_state['active_df']
-    target = st.selectbox("Alvo", df.columns)
-    if st.button("Treinar"):
-        try:
-            dfc = df.copy().dropna()
-            for c in dfc.select_dtypes('object'): dfc[c] = LabelEncoder().fit_transform(dfc[c].astype(str))
-            X = dfc.drop(columns=[target]); y = dfc[target]
-            model = RandomForestRegressor() if (y.dtype!='object' and y.nunique()>10) else RandomForestClassifier()
-            model.fit(X, y)
-            st.success(f"Modelo treinado para {target}!")
-        except Exception as e: st.error(str(e))
-
 def ui_tasks(db):
     st.title("🔨 Quadro de Tarefas & Equipa")
     
@@ -334,9 +334,24 @@ def ui_tasks(db):
                 if st.button("🗑️", key=f"del_{tid}", help="Apagar"):
                     db.delete_task(tid)
                     st.rerun()
-            
-    elif page == "🧠 Docs":
+    # fim da listagem de tarefas
+    return
+
+def ui_others(db, page):
+    if page == "🧠 Docs":
         st.title("Docs")
+        for k, v in db.user_data.get("docs", {}).items():
+            with st.expander(v.get('title', 'Documento')):
+                st.markdown(v.get('content', ''))
+                if st.button("Apagar", key=f"del_doc_{k}"):
+                    db.delete_doc(k)
+                    st.rerun()
+    elif page == "📨 Convites":
+        st.title("Convites")
+        st.info("Funcionalidade de convites ativa.")
+    elif page == "👤 Perfil":
+        st.title("Perfil")
+        st.info(f"User: {db.username}")
         for k,v in db.user_data.get("docs", {}).items():
             with st.expander(v['title']):
                 st.markdown(v['content'])
