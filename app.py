@@ -147,50 +147,66 @@ class HistoryManager:
 def ask_gemini(df, query, key, persona):
     genai.configure(api_key=key)
     
-    # Modelo
+    # 1. Tenta encontrar o modelo mais inteligente disponível
     chosen_model = "gemini-pro"
     try:
         for m in genai.list_models():
             if 'flash' in m.name: chosen_model = m.name; break
+            elif '1.5-pro' in m.name: chosen_model = m.name
     except: pass
 
-    # Resumo estatístico dos dados
-    summary = df.describe(include='all').to_string()
+    # 2. Prepara o contexto técnico (invisível ao utilizador)
+    # Convertemos datas para string para a IA entender melhor o período
+    buffer = StringIO()
+    df.info(buf=buffer)
+    info_str = buffer.getvalue()
+    desc_str = df.describe(include='all').to_string()
+    head_str = df.head(3).to_string()
     
-    # PROMPT DE ANALISTA SÉNIOR
+    # 3. O SUPER PROMPT (Consultor de Elite)
     prompt = f"""
-    TU ÉS: {persona} (Analista Sénior de Topo).
+    ATUA COMO: {persona} (Consultor Sénior de Estratégia e Dados).
     
-    CONTEXTO DOS DADOS (Para tua análise, NÃO mostres isto ao utilizador):
-    {summary}
+    CONTEXTO TÉCNICO (Para te guiares, NÃO mostres isto ao utilizador):
+    - Info: {info_str}
+    - Amostra: {head_str}
+    - Estatísticas: {desc_str}
     
-    O QUE O UTILIZADOR PEDIU: "{query}"
+    PEDIDO DO UTILIZADOR: "{query}"
     
     ---
     
-    AS TUAS INSTRUÇÕES ESTRITAS PARA O RELATÓRIO FINAL:
+    AS TUAS INSTRUÇÕES PARA O RELATÓRIO FINAL (Segue rigorosamente):
     
-    1. **NÃO MOSTRES TABELAS ESTATÍSTICAS:** O utilizador é um executivo. Não quer ver `count`, `mean`, `std` ou tabelas de `describe()`. Isso é proibido.
-    2. **FOCA-TE NOS INSIGHTS:** Em vez de dizeres "A média é 500", diz "A performance média foi positiva, rondando os 500€, o que indica...".
-    3. **ESTRUTURA CLARA:**
-       - **Título Principal** (Markdown #)
-       - **Resumo Executivo:** 2 ou 3 frases com a conclusão principal.
-       - **Análise Detalhada:** Explica os pontos altos e baixos.
-       - **Recomendações:** O que fazer a seguir?
-    4. **VISUALIZAÇÃO OBRIGATÓRIA:** Gera código Python para criar 2 ou 3 gráficos (matplotlib/seaborn) que ilustrem os teus pontos.
+    1. **NARRATIVA PROFISSIONAL:**
+       - Começa com um **Título Impactante** (H1).
+       - Escreve um **Resumo Executivo** (2-3 frases com a conclusão principal).
+       - Não uses linguagem técnica ("o dataframe tem X linhas"). Usa linguagem de negócio ("Analisámos X transações").
     
-    REGRAS TÉCNICAS (PYTHON):
-    - Responde SÓ com código Python executável em blocos ```python ... ```.
-    - O dataframe chama-se 'df'. NÃO uses `pd.read_csv`.
-    - Trata valores nulos com `fillna(0)` antes de fazer gráficos.
-    - Usa cores profissionais (`sns.set_palette("viridis")`).
-    - Usa `plt.figure(figsize=(10,6))` antes de cada gráfico.
-    - NÃO USES `print(df.describe())` ou `print(df.head())`.
+    2. **VISUALIZAÇÃO DE DADOS (Código Python):**
+       - Gera código para criar **2 a 3 Gráficos Relevantes** (Matplotlib/Seaborn).
+       - Usa `plt.figure(figsize=(10, 5))` para cada gráfico.
+       - Usa estilos modernos: `sns.set_theme(style="whitegrid")`.
+       - Usa paletas de cores profissionais (ex: `sns.set_palette("viridis")`).
+       - Adiciona SEMPRE títulos e rótulos aos eixos.
+       - **CRÍTICO:** Trata valores nulos (`df.fillna(0)`) antes de gerar gráficos para não dar erro.
+    
+    3. **ESTRUTURA SUGERIDA:**
+       - 📊 **Análise de Tendências:** O que subiu ou desceu? (Com gráfico de linha ou barras).
+       - 🔍 **Descobertas Chave:** Correlações ou anomalias interessantes.
+       - 💡 **Recomendações Estratégicas:** 3 ações concretas que o negócio deve tomar.
+    
+    4. **REGRAS DE CÓDIGO (Python):**
+       - O dataframe já existe na variável `df`. **NUNCA** uses `pd.read_csv`.
+       - Responde APENAS com o código Python dentro de blocos ```python ... ```.
+       - **PROIBIDO:** Não faças `print(df.describe())` ou `print(df.head())`. O utilizador quer insights, não tabelas.
+       - Para escrever texto no relatório, usa `print(f"## Título")` ou `print(f"O texto aqui...")`.
     """
     
     try:
         model = genai.GenerativeModel(chosen_model)
-        res = model.generate_content(prompt)
+        # Temperatura 0.2 para ser mais preciso e menos criativo/alucinado
+        res = model.generate_content(prompt, generation_config={"temperature": 0.2})
         match = re.search(r"```python(.*?)```", res.text, re.DOTALL)
         return match.group(1).strip() if match else res.text.replace("```", "").strip()
     except Exception as e: return f"print('Erro na IA: {e}')"
