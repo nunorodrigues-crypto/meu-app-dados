@@ -147,69 +147,41 @@ class HistoryManager:
 def ask_gemini(df, query, key, persona):
     genai.configure(api_key=key)
     
-    # 1. Tenta encontrar o modelo mais inteligente disponível
+    # 1. Escolha Automática do Modelo (Para não dar erro 404)
     chosen_model = "gemini-pro"
     try:
-        for m in genai.list_models():
-            if 'flash' in m.name: chosen_model = m.name; break
-            elif '1.5-pro' in m.name: chosen_model = m.name
+        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        # Tenta o Flash primeiro (mais rápido), depois o Pro 1.5
+        if any('flash' in m for m in models): chosen_model = next(m for m in models if 'flash' in m)
+        elif any('1.5-pro' in m for m in models): chosen_model = next(m for m in models if '1.5-pro' in m)
     except: pass
 
-    # 2. Prepara o contexto técnico (invisível ao utilizador)
-    # Convertemos datas para string para a IA entender melhor o período
-    buffer = StringIO()
-    df.info(buf=buffer)
-    info_str = buffer.getvalue()
-    desc_str = df.describe(include='all').to_string()
-    head_str = df.head(3).to_string()
+    # 2. Contexto Limpo
+    summary = df.describe(include='all').to_string()
     
-    # 3. O SUPER PROMPT (Consultor de Elite)
+    # 3. Prompt de Analista (Para o relatório sair bem)
     prompt = f"""
-    ATUA COMO: {persona} (Consultor Sénior de Estratégia e Dados).
+    TU ÉS: {persona} (Analista Sénior).
     
-    CONTEXTO TÉCNICO (Para te guiares, NÃO mostres isto ao utilizador):
-    - Info: {info_str}
-    - Amostra: {head_str}
-    - Estatísticas: {desc_str}
+    RESUMO DOS DADOS (Para tua análise):
+    {summary}
     
     PEDIDO DO UTILIZADOR: "{query}"
     
-    ---
-    
-    AS TUAS INSTRUÇÕES PARA O RELATÓRIO FINAL (Segue rigorosamente):
-    
-    1. **NARRATIVA PROFISSIONAL:**
-       - Começa com um **Título Impactante** (H1).
-       - Escreve um **Resumo Executivo** (2-3 frases com a conclusão principal).
-       - Não uses linguagem técnica ("o dataframe tem X linhas"). Usa linguagem de negócio ("Analisámos X transações").
-    
-    2. **VISUALIZAÇÃO DE DADOS (Código Python):**
-       - Gera código para criar **2 a 3 Gráficos Relevantes** (Matplotlib/Seaborn).
-       - Usa `plt.figure(figsize=(10, 5))` para cada gráfico.
-       - Usa estilos modernos: `sns.set_theme(style="whitegrid")`.
-       - Usa paletas de cores profissionais (ex: `sns.set_palette("viridis")`).
-       - Adiciona SEMPRE títulos e rótulos aos eixos.
-       - **CRÍTICO:** Trata valores nulos (`df.fillna(0)`) antes de gerar gráficos para não dar erro.
-    
-    3. **ESTRUTURA SUGERIDA:**
-       - 📊 **Análise de Tendências:** O que subiu ou desceu? (Com gráfico de linha ou barras).
-       - 🔍 **Descobertas Chave:** Correlações ou anomalias interessantes.
-       - 💡 **Recomendações Estratégicas:** 3 ações concretas que o negócio deve tomar.
-    
-    4. **REGRAS DE CÓDIGO (Python):**
-       - O dataframe já existe na variável `df`. **NUNCA** uses `pd.read_csv`.
-       - Responde APENAS com o código Python dentro de blocos ```python ... ```.
-       - **PROIBIDO:** Não faças `print(df.describe())` ou `print(df.head())`. O utilizador quer insights, não tabelas.
-       - Para escrever texto no relatório, usa `print(f"## Título")` ou `print(f"O texto aqui...")`.
+    REGRAS ESTRITAS DE RESPOSTA (PYTHON):
+    1. Responde APENAS com código Python em blocos ```python ... ```.
+    2. O dataframe chama-se 'df'. NÃO uses pd.read_csv.
+    3. Importa pandas, matplotlib.pyplot, seaborn.
+    4. Gráficos: Usa `plt.figure(figsize=(10,6))` e `sns.set_theme()`.
+    5. PROIBIDO: Não uses `datetime_is_numeric` (dá erro). Não faças `print(df)`.
+    6. TEXTO: Usa `print(f"## Título")` para escreveres o relatório no output.
     """
-    
     try:
         model = genai.GenerativeModel(chosen_model)
-        # Temperatura 0.2 para ser mais preciso e menos criativo/alucinado
-        res = model.generate_content(prompt, generation_config={"temperature": 0.2})
+        res = model.generate_content(prompt)
         match = re.search(r"```python(.*?)```", res.text, re.DOTALL)
         return match.group(1).strip() if match else res.text.replace("```", "").strip()
-    except Exception as e: return f"print('Erro na IA: {e}')"
+    except Exception as e: return f"print('Erro IA: {e}')"
 
 # --- FUNÇÕES AUXILIARES ---
 def ext_hash_pass(p): return hashlib.sha256(p.encode()).hexdigest()
