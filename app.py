@@ -22,15 +22,13 @@ from sklearn.preprocessing import LabelEncoder
 
 # --- 1. CONFIGURAÇÃO GERAL ---
 st.set_page_config(
-    page_title="AInsight Pro", 
+    page_title="AInsight Enterprise", 
     page_icon="👁️", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- 2. MOTOR DE DADOS E BACKEND ---
-HISTORY_FILE = "chat_database.json"
-
+# --- 2. MOTOR DE DADOS BLINDADO ---
 def clean_money_universal(val):
     if pd.isna(val) or val == '': return 0.0
     s = str(val).strip()
@@ -43,6 +41,19 @@ def clean_money_universal(val):
         elif ',' in s_clean: s_clean = s_clean.replace(',', '.')
         return float(s_clean)
     except: return 0.0
+
+def load_universal_file(uploaded_file):
+    try:
+        if uploaded_file.name.endswith('.xlsx') or uploaded_file.name.endswith('.xls'):
+            return pd.read_excel(uploaded_file)
+        encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
+        for enc in encodings:
+            try:
+                uploaded_file.seek(0)
+                return pd.read_csv(uploaded_file, sep=None, engine='python', encoding=enc)
+            except: continue
+        return None
+    except: return None
 
 def smart_clean_dataframe(df):
     df.dropna(how='all', inplace=True)
@@ -64,69 +75,55 @@ def smart_clean_dataframe(df):
             except: pass
     return df
 
+# --- 3. BACKEND ROBUSTO ---
+HISTORY_FILE = "chat_database.json"
+
 class HistoryManager:
     def __init__(self, username="system"):
         self.username = username
         self.load_db()
 
     def load_db(self):
-        # AQUI ESTAVA O ERRO DE INDENTAÇÃO - AGORA ESTÁ CORRIGIDO
         if not os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, 'w') as f: json.dump({"users": {}, "guest_tokens": {}, "workspaces": {}}, f)
+            with open(HISTORY_FILE, 'w') as f: json.dump({"users": {}, "guest_tokens": {}}, f)
         try:
             with open(HISTORY_FILE, 'r') as f: self.full_db = json.load(f)
-        except: self.full_db = {"users": {}, "guest_tokens": {}, "workspaces": {}}
+        except: self.full_db = {"users": {}, "guest_tokens": {}}
         
-        for k in ["users", "guest_tokens", "workspaces"]: 
-            if k not in self.full_db: self.full_db[k] = {}
-
+        if "users" not in self.full_db: self.full_db["users"] = {}
         if self.username not in self.full_db["users"]:
-            self.user_data = {
-                "chats": {}, "tasks": {}, "docs": {}, "datasets": {}, 
-                "plan": "free", "workspaces": [], "notifications": [], "last_invite_at": None
-            }
+            self.user_data = {"chats": {}, "docs": {}, "datasets": {}, "tasks": {}, "notifications": [], "plan": "free", "last_invite_at": None}
         else:
             self.user_data = self.full_db["users"][self.username]
-            defaults = {"notifications": [], "last_invite_at": None, "chats": {}, "tasks": {}, "docs": {}, "datasets": {}}
-            for k, v in defaults.items():
-                if k not in self.user_data: self.user_data[k] = v
+            for k in ["notifications", "datasets", "docs", "tasks"]:
+                if k not in self.user_data: self.user_data[k] = [] if k=="notifications" else {}
 
     def save_db(self):
         if self.username in self.full_db["users"]:
             self.full_db["users"][self.username] = self.user_data
             with open(HISTORY_FILE, 'w') as f: json.dump(self.full_db, f, indent=4, default=str)
 
-    # --- MÉTODOS DE DADOS ---
-    def save_dataset_version(self, name, description, df, parent_id=None):
+    def save_dataset_version(self, name, df):
         if "datasets" not in self.user_data: self.user_data["datasets"] = {}
+        did = str(uuid.uuid4())
         djson = df.to_json(orient='split', date_format='iso')
-        ts = datetime.now().isoformat()
-        
-        if parent_id and parent_id in self.user_data["datasets"]:
-            ds = self.user_data["datasets"][parent_id]
-            nv = f"v{len(ds['commits']) + 1}"
-            ds["commits"].insert(0, {"version": nv, "message": description, "timestamp": ts, "author": self.username, "data_snapshot": djson})
-            ds["current_version"] = nv
-            ds_id = parent_id
-        else:
-            ds_id = str(uuid.uuid4())
-            self.user_data["datasets"][ds_id] = {
-                "name": name, "description": description, "created_at": ts, "owner": self.username, "current_version": "v1",
-                "commits": [{"version": "v1", "message": "Init", "timestamp": ts, "author": self.username, "data_snapshot": djson}]
-            }
+        self.user_data["datasets"][did] = {
+            "name": name, "current_version": "v1", "created_at": datetime.now().isoformat(),
+            "commits": [{"version": "v1", "msg": "Init", "ts": datetime.now().isoformat(), "data": djson}]
+        }
         self.save_db()
-        return ds_id
+        return did
 
-    def get_dataset(self, ds_id):
-        if ds_id in self.user_data.get("datasets", {}):
-            try: return pd.read_json(StringIO(self.user_data["datasets"][ds_id]["commits"][0]["data_snapshot"]), orient='split')
+    def get_dataset(self, did):
+        if did in self.user_data.get("datasets", {}):
+            try: return pd.read_json(StringIO(self.user_data["datasets"][did]["commits"][0]["data"]), orient='split')
             except: return None
         return None
-
-    # --- MÉTODOS CRUD ---
-    def create_task(self, title, description="", priority="Média", assignee=None):
+    
+    # CRUD COMPLETO PARA TAREFAS E DOCS
+    def create_task(self, title, desc="", prio="Média"):
         tid = str(uuid.uuid4())
-        self.user_data["tasks"][tid] = {"title": title, "description": description, "status": "To Do", "priority": priority, "assignee": assignee, "created_at": datetime.now().isoformat()}
+        self.user_data["tasks"][tid] = {"title": title, "desc": desc, "status": "To Do", "prio": prio, "created_at": datetime.now().isoformat()}
         self.save_db()
     
     def move_task(self, tid, status):
@@ -140,10 +137,56 @@ class HistoryManager:
         self.user_data["docs"][did] = {"title": title, "content": content, "updated_at": datetime.now().isoformat()}
         self.save_db()
     
+    def update_doc(self, did, content):
+        if did in self.user_data["docs"]: self.user_data["docs"][did]["content"] = content; self.save_db()
+
     def delete_doc(self, did):
         if did in self.user_data["docs"]: del self.user_data["docs"][did]; self.save_db()
 
-# --- 3. FUNÇÕES AUXILIARES ---
+# --- 4. CÉREBRO IA ---
+def ask_gemini(df, query, key, persona):
+    genai.configure(api_key=key)
+    chosen_model = "gemini-pro"
+    try:
+        for m in genai.list_models():
+            if 'flash' in m.name: chosen_model = m.name; break
+    except: pass
+
+    summary = df.describe(include='all').to_string()
+    prompt = f"""
+    ATUA COMO: {persona} (Nível Executivo).
+    CONTEXTO DADOS: {summary}
+    PEDIDO: "{query}"
+    
+    REGRAS ESTRITAS DE RESPOSTA (PYTHON):
+    1. Responde APENAS com código Python em blocos ```python ... ```.
+    2. PROIBIDO usar `print(df.head())`, `print(df.info())` ou `print(df.describe())`. O utilizador quer insights, não tabelas brutas.
+    3. O teu output deve ser Texto Formatado (Markdown) e Gráficos (matplotlib/seaborn).
+    4. O dataframe chama-se 'df'. NÃO uses pd.read_csv.
+    5. Trata nulos antes de plotar.
+    """
+    try:
+        model = genai.GenerativeModel(chosen_model)
+        res = model.generate_content(prompt)
+        match = re.search(r"```python(.*?)```", res.text, re.DOTALL)
+        return match.group(1).strip() if match else res.text.replace("```", "").strip()
+    except Exception as e: return f"print('Erro IA: {e}')"
+
+def execute_code(code, df):
+    try:
+        code = code.replace(", datetime_is_numeric=True", "")
+        old = sys.stdout; sys.stdout = StringIO()
+        exec(code, {}, {'df': df, 'pd': pd, 'plt': plt, 'sns': sns, 'np': np})
+        out = sys.stdout.getvalue(); sys.stdout = old
+        fig = plt.gcf()
+        if not plt.gca().has_data(): fig = None
+        else: plt.clf()
+        return out, fig
+    except Exception as e:
+        sys.stdout = sys.__stdout__
+        return f"Erro Código: {e}", None
+
+# --- 5. FUNÇÕES AUXILIARES ---
 def ext_hash_pass(p): return hashlib.sha256(p.encode()).hexdigest()
 
 def ext_register_user(u, p, e):
@@ -155,12 +198,6 @@ def ext_register_user(u, p, e):
     }
     with open(HISTORY_FILE, 'w') as f: json.dump(db.full_db, f, indent=4, default=str)
     return True, "Criado!"
-
-def ext_send_notification(db, u, msg):
-    db.load_db()
-    if u in db.full_db["users"]:
-        db.full_db["users"][u].setdefault("notifications", []).insert(0, {"msg": msg, "read": False, "timestamp": datetime.now().isoformat()})
-        with open(HISTORY_FILE, 'w') as f: json.dump(db.full_db, f, indent=4, default=str)
 
 def ext_create_invite(db, owner, data, perm):
     db.load_db()
@@ -186,140 +223,109 @@ def ext_consume_invite(tk):
             return True, d
     return False, None
 
-# --- 4. CÉREBRO IA ---
-def ask_gemini(df, query, key, persona, *args, **kwargs):
-    genai.configure(api_key=key)
-    chosen_model = "gemini-pro"
-    try:
-        for m in genai.list_models():
-            if 'flash' in m.name: chosen_model = m.name; break
-    except: pass
+# --- 6. INTERFACES (AS BONITAS) ---
 
-    p_txt = f"Atue como {persona}. Analise o dataframe."
-    summary = df.describe(include='all').to_string()
-    prompt = f"""
-    {p_txt}
-    RESUMO DADOS: {summary}
-    PERGUNTA: "{query}"
-    REGRAS:
-    1. Responda SÓ com código Python em blocos ```python```.
-    2. Usa o dataframe 'df' (já existe). NÃO uses pd.read_csv.
-    3. Importa pandas, matplotlib.pyplot, seaborn.
-    4. Gráficos: plt.figure(figsize=(10,6)).
-    5. NÃO uses 'datetime_is_numeric'.
-    """
-    try:
-        model = genai.GenerativeModel(chosen_model)
-        res = model.generate_content(prompt)
-        match = re.search(r"```python(.*?)```", res.text, re.DOTALL)
-        return match.group(1).strip() if match else res.text.replace("```", "").strip()
-    except Exception as e: return f"print('Erro IA: {e}')"
-
-def execute_code(code, df):
-    try:
-        code = code.replace(", datetime_is_numeric=True", "")
-        old = sys.stdout; sys.stdout = StringIO()
-        exec(code, {}, {'df': df, 'pd': pd, 'plt': plt, 'sns': sns, 'np': np})
-        out = sys.stdout.getvalue(); sys.stdout = old
-        fig = plt.gcf()
-        if not plt.gca().has_data(): fig = None
-        else: plt.clf()
-        return out, fig
-    except Exception as e:
-        sys.stdout = sys.__stdout__
-        return f"Erro: {e}", None
-
-def generate_insights(df, persona, key, *args, **kwargs):
-    q = "Gera um relatório completo com gráficos e insights profundos."
-    code = ask_gemini(df, q, key, persona)
-    return q, code
-
-# --- 5. INTERFACES ---
 def ui_login():
-    st.markdown("## 🔐 AInsight Pro")
-    t1, t2 = st.tabs(["Entrar", "Criar Conta"])
-    with t1:
-        u = st.text_input("User"); p = st.text_input("Pass", type="password")
-        if st.button("Entrar"):
-            db = HistoryManager(); usr = db.full_db["users"].get(u)
-            if (u=="admin" and p=="123") or (usr and usr.get("password") == ext_hash_pass(p)):
-                st.session_state.update({'auth': True, 'user': u, 'guest': False})
-                st.rerun()
-            else: st.error("Erro.")
-        
-        with st.expander("Usar Convite"):
-            tk = st.text_input("Código")
-            if st.button("Validar"):
-                ok, d = ext_consume_invite(tk)
-                if ok:
-                    st.session_state.update({'auth': True, 'user': "Convidado", 'guest': True})
-                    if d["share_data"]: st.session_state['guest_viewing_owner'] = d["created_by"]
+    # CSS Animado
+    st.markdown("""
+        <style>
+        [data-testid="stAppViewContainer"] {
+            background: linear-gradient(-45deg, #0f0c29, #302b63, #24243e);
+            background-size: 400% 400%;
+            animation: gradient 15s ease infinite;
+            color: white;
+        }
+        @keyframes gradient { 0% {background-position: 0% 50%;} 50% {background-position: 100% 50%;} 100% {background-position: 0% 50%;} }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    c1,c2,c3 = st.columns([1,2,1])
+    with c2:
+        st.title("🔐 AInsight Enterprise")
+        t1, t2 = st.tabs(["Entrar", "Criar Conta"])
+        with t1:
+            u = st.text_input("User"); p = st.text_input("Pass", type="password")
+            if st.button("Entrar", use_container_width=True):
+                db = HistoryManager(); usr = db.full_db["users"].get(u)
+                if (u=="admin" and p=="123") or (usr and usr.get("password") == ext_hash_pass(p)):
+                    st.session_state.update({'auth': True, 'user': u, 'guest': False})
                     st.rerun()
-                else: st.error("Inválido.")
-
-    with t2:
-        nu = st.text_input("Novo User"); ne = st.text_input("Email"); np = st.text_input("Pass", type="password")
-        if st.button("Registar"):
-            ok, msg = ext_register_user(nu, np, ne)
-            if ok: st.success(msg)
-            else: st.error(msg)
-
-def ui_datahub(db):
-    st.title("🧬 Data Hub")
-    is_guest = st.session_state.get('guest')
-    
-    if not is_guest:
-        with st.expander("➕ Novo Dataset"):
-            up = st.file_uploader("Ficheiro", type=['csv', 'xlsx'])
-            nm = st.text_input("Nome")
-            if st.button("Guardar") and up:
-                try:
-                    df = pd.read_csv(up) if up.name.endswith('.csv') else pd.read_excel(up)
-                    df = smart_clean_dataframe(df)
-                    db.save_dataset_version(nm, "Upload", df)
-                    st.success("Guardado!"); time.sleep(0.5); st.rerun()
-                except Exception as e: st.error(f"Erro: {e}")
-    
-    if not db.user_data.get("datasets"): st.info("Vazio."); return
-    
-    for did, d in db.user_data["datasets"].items():
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([3, 1, 1])
-            c1.write(f"**{d['name']}** ({d['current_version']})")
+                else: st.error("Erro.")
             
-            # --- O BOTÃO MÁGICO DE PONTE ---
-            if c2.button("📊 Analisar", key=did):
-                st.session_state['df'] = db.get_dataset(did)
-                st.session_state['force_page'] = "📊 Análise IA" # <--- OBRIGA A MUDAR
-                st.rerun()
-                
-            if not is_guest and c3.button("🤖 ML", key=f"m_{did}"):
-                st.session_state['ml_target'] = did
-                st.session_state['force_page'] = "🤖 ML Studio"
-                st.rerun()
+            with st.expander("Usar Convite"):
+                tk = st.text_input("Código")
+                if st.button("Validar"):
+                    ok, d = ext_consume_invite(tk)
+                    if ok:
+                        st.session_state.update({'auth': True, 'user': "Convidado", 'guest': True})
+                        if d["share_data"]: st.session_state['guest_viewing_owner'] = d["created_by"]
+                        st.rerun()
+                    else: st.error("Inválido.")
 
-def ui_analysis(db, key):
+        with t2:
+            nu = st.text_input("Novo User"); ne = st.text_input("Email"); np = st.text_input("Pass", type="password")
+            if st.button("Registar", use_container_width=True):
+                ok, msg = ext_register_user(nu, np, ne)
+                if ok: st.success(msg)
+                else: st.error(msg)
+
+def ui_analysis_unified(db, key):
     st.title("📊 Análise IA")
-    df = st.session_state.get('df')
-    if df is None: st.warning("Vai ao Data Hub e seleciona um ficheiro."); return
+    
+    # ZONA DE UPLOAD
+    if 'active_df' not in st.session_state:
+        with st.container(border=True):
+            st.header("📂 Carregar Ficheiro")
+            st.caption("Arrasta o teu Excel ou CSV para aqui. A análise começa automaticamente.")
+            up = st.file_uploader("Ficheiro", type=['csv', 'xlsx', 'xls'])
+            if up:
+                with st.spinner("A processar dados..."):
+                    try:
+                        df = load_universal_file(up)
+                        if df is not None:
+                            df = smart_clean_dataframe(df)
+                            db.save_dataset_version(up.name, df)
+                            st.session_state['active_df'] = df
+                            st.session_state['active_name'] = up.name
+                            st.success("Carregado!"); time.sleep(0.5); st.rerun()
+                        else: st.error("Formato desconhecido.")
+                    except Exception as e: st.error(str(e))
+        
+        # Histórico
+        if db.user_data.get("datasets"):
+            st.divider(); st.subheader("Histórico")
+            for did, d in db.user_data["datasets"].items():
+                if st.button(f"📄 {d['name']}", key=did):
+                    st.session_state['active_df'] = db.get_dataset(did)
+                    st.session_state['active_name'] = d['name']
+                    st.rerun()
+        return
+
+    # ZONA DE ANÁLISE
+    df = st.session_state['active_df']
+    name = st.session_state['active_name']
     
     c1, c2 = st.columns([3, 1])
-    c1.success(f"Dados: {len(df)} linhas")
-    persona = c2.selectbox("Persona", ["Data Scientist", "CFO", "CMO", "COO"])
+    c1.success(f"✅ Analisando: **{name}** ({len(df)} linhas)")
+    if c2.button("❌ Trocar Ficheiro"): del st.session_state['active_df']; st.rerun()
+        
+    persona = st.selectbox("Persona", ["Data Scientist", "CFO", "CMO", "COO"])
     
-    if st.button("🚀 Relatório Automático", type="primary"):
+    if st.button(f"🚀 Relatório Automático ({persona})", type="primary"):
         if not key: st.error("Falta API Key")
         else:
-            with st.spinner("A analisar..."):
-                q, code = generate_insights(df, persona, key)
+            with st.spinner("A gerar insights visuais..."):
+                q = f"Gera um relatório executivo detalhado como {persona}."
+                code = ask_gemini(df, q, key, persona)
                 txt, fig = execute_code(code, df)
-                if txt: st.markdown(txt)
+                st.markdown(txt)
                 if fig: st.pyplot(fig)
-                db.create_doc(f"Relatório {persona}", txt)
-                st.toast("Guardado!")
-                with st.expander("Código"): st.code(code)
+                
+                db.create_doc(f"Relatório {name} - {persona}", txt)
+                st.toast("Relatório guardado em Docs!")
+                with st.expander("Ver Código"): st.code(code)
 
-    if q := st.chat_input("Pergunta..."):
+    if q := st.chat_input("Faz uma pergunta..."):
         with st.chat_message("user"): st.write(q)
         with st.chat_message("assistant"):
             code = ask_gemini(df, q, key, persona)
@@ -329,24 +335,22 @@ def ui_analysis(db, key):
 
 def ui_ml(db):
     st.title("🤖 ML Studio")
-    if st.session_state.get('guest'): st.error("Sem permissão."); return
+    if 'active_df' not in st.session_state: st.warning("Carrega ficheiro na Análise IA primeiro."); return
     
-    tid = st.session_state.get('ml_target')
-    if not tid: st.warning("Escolhe no Data Hub."); return
+    df = st.session_state['active_df']
+    target = st.selectbox("O que queres prever?", df.columns)
     
-    df = db.get_dataset(tid)
-    target = st.selectbox("Alvo", df.columns)
-    if st.button("Treinar"):
-        try:
-            dfc = df.copy().dropna()
-            for c in dfc.select_dtypes('object'): dfc[c] = LabelEncoder().fit_transform(dfc[c].astype(str))
-            X = dfc.drop(columns=[target]); y = dfc[target]
-            model = RandomForestRegressor() if (y.dtype!='object' and y.nunique()>10) else RandomForestClassifier()
-            model.fit(X, y)
-            msg = f"Modelo treinado para '{target}'"
-            ext_send_notification(db, db.username, msg)
-            st.success(msg)
-        except Exception as e: st.error(str(e))
+    if st.button("Treinar Modelo"):
+        with st.spinner("A aprender padrões..."):
+            try:
+                dfc = df.copy().dropna()
+                for c in dfc.select_dtypes('object'): dfc[c] = LabelEncoder().fit_transform(dfc[c].astype(str))
+                X = dfc.drop(columns=[target]); y = dfc[target]
+                model = RandomForestRegressor() if (y.dtype!='object' and y.nunique()>10) else RandomForestClassifier()
+                model.fit(X, y)
+                st.success(f"✅ Modelo treinado para prever '{target}'!")
+                st.balloons()
+            except Exception as e: st.error(str(e))
 
 def ui_invites(db):
     st.title("📨 Convites")
@@ -354,28 +358,67 @@ def ui_invites(db):
         nm = st.text_input("Nome"); em = st.text_input("Email"); ph = st.text_input("Tel")
         perm = st.checkbox("Partilhar Dados")
         if st.form_submit_button("Enviar"):
-            ok, res = ext_create_invite(db, db.username, {"email":em}, perm)
-            if ok: st.success(f"Código: {res}"); st.toast("Simulação: Email enviado.")
-            else: st.error(res)
+            if nm and em:
+                ok, res = ext_create_invite(db, db.username, {"email":em}, perm)
+                if ok: st.success(f"Código: {res}"); st.toast("Email simulado enviado.")
+                else: st.error(res)
+            else: st.warning("Preenche dados.")
+
+def ui_tasks(db):
+    st.title("🔨 Quadro de Tarefas")
+    with st.expander("Nova Tarefa"):
+        with st.form("nt"):
+            t = st.text_input("Título"); d = st.text_area("Descrição"); p = st.selectbox("Prioridade", ["Alta","Média"])
+            if st.form_submit_button("Criar"): db.create_task(t, d, p); st.rerun()
+            
+    # Kanban Simples
+    col1, col2, col3 = st.columns(3)
+    tasks = db.user_data.get("tasks", {})
+    todo = {k:v for k,v in tasks.items() if v['status'] == 'To Do'}
+    doing = {k:v for k,v in tasks.items() if v['status'] == 'Doing'}
+    done = {k:v for k,v in tasks.items() if v['status'] == 'Done'}
+    
+    with col1:
+        st.subheader("📌 A Fazer")
+        for k,v in todo.items():
+            st.info(f"{v['title']}")
+            if st.button("➡️", key=f"do_{k}"): db.move_task(k, "Doing"); st.rerun()
+            
+    with col2:
+        st.subheader("⚙️ A Decorrer")
+        for k,v in doing.items():
+            st.warning(f"{v['title']}")
+            if st.button("✅", key=f"ok_{k}"): db.move_task(k, "Done"); st.rerun()
+            
+    with col3:
+        st.subheader("🎉 Feito")
+        for k,v in done.items():
+            st.success(f"{v['title']}")
+            if st.button("🗑️", key=f"del_{k}"): db.delete_task(k); st.rerun()
+
+def ui_docs(db):
+    st.title("🧠 Docs & Relatórios")
+    col1, col2 = st.columns([1,3])
+    with col1:
+        if st.button("➕ Novo Doc"): st.session_state['doc_id'] = "new"
+        for did, d in db.user_data.get("docs", {}).items():
+            if st.button(f"📄 {d['title']}", key=did): st.session_state['doc_id'] = did
+            
+    with col2:
+        did = st.session_state.get('doc_id')
+        if did == "new":
+            t = st.text_input("Título"); c = st.text_area("Conteúdo", height=400)
+            if st.button("Salvar"): db.create_doc(t, c); st.success("Salvo!"); st.rerun()
+        elif did and did in db.user_data["docs"]:
+            d = db.user_data["docs"][did]
+            st.markdown(d['content'])
+            if st.button("Apagar Doc"): db.delete_doc(did); st.rerun()
 
 def ui_profile(db):
     st.title("Perfil"); u = db.user_data
     st.info(f"User: {db.username}")
-    if st.button("Limpar Notificações"): 
-        u["notifications"] = []; db.save_db(); st.rerun()
+    if st.button("Limpar Notificações"): u["notifications"] = []; db.save_db(); st.rerun()
     for n in u.get("notifications", []): st.write(f"📩 {n['msg']}")
-
-def ui_tasks(db):
-    st.title("Tarefas")
-    with st.form("nt"):
-        t = st.text_input("Tarefa")
-        if st.form_submit_button("Add"): db.create_task(t); st.rerun()
-    for k, v in db.user_data.get("tasks", {}).items(): st.write(f"- {v['title']}")
-
-def ui_docs(db):
-    st.title("Docs")
-    for k, v in db.user_data.get("docs", {}).items():
-        with st.expander(v['title']): st.write(v['content'])
 
 # --- MAIN ---
 def main():
@@ -387,6 +430,7 @@ def main():
         user = st.session_state["user"]
         guest = st.session_state.get('guest', False)
         
+        # Carrega DB (Dono ou Partilhada)
         if guest and st.session_state.get("guest_viewing_owner"):
             db = HistoryManager(st.session_state["guest_viewing_owner"])
         else:
@@ -398,11 +442,11 @@ def main():
         
         with st.sidebar:
             st.header("AInsight Pro"); st.caption(f"User: {user}")
-            opts = ["📊 Análise IA", "🧬 Data Hub", "🤖 ML Studio", "🔨 Tarefas", "🧠 Docs", lbl_n]
-            if not guest: opts.insert(3, "📨 Convites")
+            opts = ["📊 Análise IA", "🤖 ML Studio", "🔨 Tarefas", "🧠 Docs", lbl_n]
+            if not guest: opts.insert(2, "📨 Convites")
             opts.append("👤 Perfil")
             
-            # NAVEGAÇÃO FORÇADA (A PONTE CORRIGIDA)
+            # Navegação Forçada
             idx = 0
             if 'force_page' in st.session_state and st.session_state['force_page'] in opts:
                 idx = opts.index(st.session_state['force_page']); del st.session_state['force_page']
@@ -412,8 +456,7 @@ def main():
             
         key = st.secrets.get("GEMINI_API_KEY", "")
         
-        if "Análise" in page: ui_analysis(db, key)
-        elif "Data Hub" in page: ui_datahub(db)
+        if "Análise" in page: ui_analysis_unified(db, key)
         elif "ML Studio" in page: ui_ml(db)
         elif "Convites" in page: ui_invites(db)
         elif "Tarefas" in page: ui_tasks(db)
