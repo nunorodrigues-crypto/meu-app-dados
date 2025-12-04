@@ -120,7 +120,7 @@ class HistoryManager:
             except: return None
         return None
     
-    # CRUD COMPLETO PARA TAREFAS E DOCS
+    # TAREFAS E DOCS
     def create_task(self, title, desc="", prio="Média"):
         tid = str(uuid.uuid4())
         self.user_data["tasks"][tid] = {"title": title, "desc": desc, "status": "To Do", "prio": prio, "created_at": datetime.now().isoformat()}
@@ -143,7 +143,7 @@ class HistoryManager:
     def delete_doc(self, did):
         if did in self.user_data["docs"]: del self.user_data["docs"][did]; self.save_db()
 
-# --- 4. CÉREBRO IA ---
+# --- CÉREBRO IA ---
 def ask_gemini(df, query, key, persona):
     genai.configure(api_key=key)
     
@@ -154,10 +154,10 @@ def ask_gemini(df, query, key, persona):
             if 'flash' in m.name: chosen_model = m.name; break
     except: pass
 
-    # Resumo estatístico (A IA lê isto, mas NÃO deve mostrar isto)
+    # Resumo estatístico dos dados
     summary = df.describe(include='all').to_string()
     
-    # PROMPT DE ANALISTA SÉNIOR (O Segredo da Qualidade)
+    # PROMPT DE ANALISTA SÉNIOR
     prompt = f"""
     TU ÉS: {persona} (Analista Sénior de Topo).
     
@@ -195,7 +195,7 @@ def ask_gemini(df, query, key, persona):
         return match.group(1).strip() if match else res.text.replace("```", "").strip()
     except Exception as e: return f"print('Erro na IA: {e}')"
 
-# --- 5. FUNÇÕES AUXILIARES ---
+# --- FUNÇÕES AUXILIARES ---
 def ext_hash_pass(p): return hashlib.sha256(p.encode()).hexdigest()
 
 def ext_register_user(u, p, e):
@@ -232,7 +232,7 @@ def ext_consume_invite(tk):
             return True, d
     return False, None
 
-# --- 6. INTERFACES (AS BONITAS) ---
+# --- INTERFACES ---
 
 def ui_login():
     # CSS Animado
@@ -315,15 +315,15 @@ def ui_analysis_unified(db, key):
     name = st.session_state['active_name']
     
     c1, c2 = st.columns([3, 1])
-    c1.success(f"✅ Analisando: **{name}** ({len(df)} linhas)")
+    c1.success(f"✅ A Analisar: **{name}** ({len(df)} linhas)")
     if c2.button("❌ Trocar Ficheiro"): del st.session_state['active_df']; st.rerun()
         
     persona = st.selectbox("Persona", ["Data Scientist", "CFO", "CMO", "COO"])
     
-    if st.button(f"🚀 Relatório Automático ({persona})", type="primary"):
+    if st.button(f" Relatório Automático ({persona})", type="primary"):
         if not key: st.error("Falta API Key")
         else:
-            with st.spinner("A gerar insights visuais..."):
+            with st.spinner("A gerar insights..."):
                 q = f"Gera um relatório executivo detalhado como {persona}."
                 code = ask_gemini(df, q, key, persona)
                 txt, fig = execute_code(code, df)
@@ -347,7 +347,7 @@ def ui_ml(db):
     if 'active_df' not in st.session_state: st.warning("Carrega ficheiro na Análise IA primeiro."); return
     
     df = st.session_state['active_df']
-    target = st.selectbox("O que queres prever?", df.columns)
+    target = st.selectbox("O que pretende prever?", df.columns)
     
     if st.button("Treinar Modelo"):
         with st.spinner("A aprender padrões..."):
@@ -374,7 +374,7 @@ def ui_invites(db):
             else: st.warning("Preenche dados.")
 
 def ui_tasks(db):
-    st.title("🔨 Quadro de Tarefas")
+    st.title(" Quadro de Tarefas")
     with st.expander("Nova Tarefa"):
         with st.form("nt"):
             t = st.text_input("Título"); d = st.text_area("Descrição"); p = st.selectbox("Prioridade", ["Alta","Média"])
@@ -451,8 +451,8 @@ def main():
         
         with st.sidebar:
             st.header("AInsight Pro"); st.caption(f"User: {user}")
-            opts = ["📊 Análise IA", "🤖 ML Studio", "🔨 Tarefas", "🧠 Docs", lbl_n]
-            if not guest: opts.insert(2, "📨 Convites")
+            opts = [" Análise ", " ML Studio", " Tarefas", " Docs", lbl_n]
+            if not guest: opts.insert(2, " Convites")
             opts.append("👤 Perfil")
             
             # Navegação Forçada
