@@ -146,45 +146,54 @@ class HistoryManager:
 # --- 4. CÉREBRO IA ---
 def ask_gemini(df, query, key, persona):
     genai.configure(api_key=key)
+    
+    # Modelo
     chosen_model = "gemini-pro"
     try:
         for m in genai.list_models():
             if 'flash' in m.name: chosen_model = m.name; break
     except: pass
 
+    # Resumo estatístico (A IA lê isto, mas NÃO deve mostrar isto)
     summary = df.describe(include='all').to_string()
-    prompt = f"""
-    ATUA COMO: {persona} (Nível Executivo).
-    CONTEXTO DADOS: {summary}
-    PEDIDO: "{query}"
     
-    REGRAS ESTRITAS DE RESPOSTA (PYTHON):
-    1. Responde APENAS com código Python em blocos ```python ... ```.
-    2. PROIBIDO usar `print(df.head())`, `print(df.info())` ou `print(df.describe())`. O utilizador quer insights, não tabelas brutas.
-    3. O teu output deve ser Texto Formatado (Markdown) e Gráficos (matplotlib/seaborn).
-    4. O dataframe chama-se 'df'. NÃO uses pd.read_csv.
-    5. Trata nulos antes de plotar.
+    # PROMPT DE ANALISTA SÉNIOR (O Segredo da Qualidade)
+    prompt = f"""
+    TU ÉS: {persona} (Analista Sénior de Topo).
+    
+    CONTEXTO DOS DADOS (Para tua análise, NÃO mostres isto ao utilizador):
+    {summary}
+    
+    O QUE O UTILIZADOR PEDIU: "{query}"
+    
+    ---
+    
+    AS TUAS INSTRUÇÕES ESTRITAS PARA O RELATÓRIO FINAL:
+    
+    1. **NÃO MOSTRES TABELAS ESTATÍSTICAS:** O utilizador é um executivo. Não quer ver `count`, `mean`, `std` ou tabelas de `describe()`. Isso é proibido.
+    2. **FOCA-TE NOS INSIGHTS:** Em vez de dizeres "A média é 500", diz "A performance média foi positiva, rondando os 500€, o que indica...".
+    3. **ESTRUTURA CLARA:**
+       - **Título Principal** (Markdown #)
+       - **Resumo Executivo:** 2 ou 3 frases com a conclusão principal.
+       - **Análise Detalhada:** Explica os pontos altos e baixos.
+       - **Recomendações:** O que fazer a seguir?
+    4. **VISUALIZAÇÃO OBRIGATÓRIA:** Gera código Python para criar 2 ou 3 gráficos (matplotlib/seaborn) que ilustrem os teus pontos.
+    
+    REGRAS TÉCNICAS (PYTHON):
+    - Responde SÓ com código Python executável em blocos ```python ... ```.
+    - O dataframe chama-se 'df'. NÃO uses `pd.read_csv`.
+    - Trata valores nulos com `fillna(0)` antes de fazer gráficos.
+    - Usa cores profissionais (`sns.set_palette("viridis")`).
+    - Usa `plt.figure(figsize=(10,6))` antes de cada gráfico.
+    - NÃO USES `print(df.describe())` ou `print(df.head())`.
     """
+    
     try:
         model = genai.GenerativeModel(chosen_model)
         res = model.generate_content(prompt)
         match = re.search(r"```python(.*?)```", res.text, re.DOTALL)
         return match.group(1).strip() if match else res.text.replace("```", "").strip()
-    except Exception as e: return f"print('Erro IA: {e}')"
-
-def execute_code(code, df):
-    try:
-        code = code.replace(", datetime_is_numeric=True", "")
-        old = sys.stdout; sys.stdout = StringIO()
-        exec(code, {}, {'df': df, 'pd': pd, 'plt': plt, 'sns': sns, 'np': np})
-        out = sys.stdout.getvalue(); sys.stdout = old
-        fig = plt.gcf()
-        if not plt.gca().has_data(): fig = None
-        else: plt.clf()
-        return out, fig
-    except Exception as e:
-        sys.stdout = sys.__stdout__
-        return f"Erro Código: {e}", None
+    except Exception as e: return f"print('Erro na IA: {e}')"
 
 # --- 5. FUNÇÕES AUXILIARES ---
 def ext_hash_pass(p): return hashlib.sha256(p.encode()).hexdigest()
