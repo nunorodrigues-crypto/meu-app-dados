@@ -29,6 +29,37 @@ st.set_page_config(
 )
 
 # --- 2. MOTOR DE DADOS BLINDADO ---
+
+def execute_code(code, df):
+    """
+    Executa o código Python gerado pela IA.
+    Esta função tem de estar aqui em cima para ser encontrada.
+    """
+    try:
+        # Correção do erro do Pandas
+        code = code.replace(", datetime_is_numeric=True", "")
+        code = code.replace("datetime_is_numeric=True", "")
+        
+        old_stdout = sys.stdout
+        sys.stdout = buffer = StringIO()
+        
+        # Ambiente de execução com tudo o que é preciso
+        local_vars = {'df': df, 'pd': pd, 'plt': plt, 'sns': sns, 'np': np}
+        exec(code, {}, local_vars)
+        
+        sys.stdout = old_stdout
+        text_output = buffer.getvalue()
+        
+        # Captura gráfico se existir
+        fig = plt.gcf()
+        if not plt.gca().has_data(): fig = None
+        else: plt.clf()
+        
+        return text_output, fig
+    except Exception as e:
+        sys.stdout = sys.__stdout__
+        return f"Erro de Código: {e}", None
+    
 def clean_money_universal(val):
     if pd.isna(val) or val == '': return 0.0
     s = str(val).strip()
@@ -144,37 +175,29 @@ class HistoryManager:
         if did in self.user_data["docs"]: del self.user_data["docs"][did]; self.save_db()
 
 # --- CÉREBRO IA ---
-def ask_gemini(df, query, key, persona):
+def ask_gemini(df, query, key, persona, *args, **kwargs):
     genai.configure(api_key=key)
     
-    # 1. Escolha Automática do Modelo (Para não dar erro 404)
+    # 1. Escolha Automática do Modelo
     chosen_model = "gemini-pro"
     try:
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        # Tenta o Flash primeiro (mais rápido), depois o Pro 1.5
         if any('flash' in m for m in models): chosen_model = next(m for m in models if 'flash' in m)
         elif any('1.5-pro' in m for m in models): chosen_model = next(m for m in models if '1.5-pro' in m)
     except: pass
 
-    # 2. Contexto Limpo
     summary = df.describe(include='all').to_string()
     
-    # 3. Prompt de Analista (Para o relatório sair bem)
     prompt = f"""
-    TU ÉS: {persona} (Analista Sénior).
-    
-    RESUMO DOS DADOS (Para tua análise):
-    {summary}
-    
-    PEDIDO DO UTILIZADOR: "{query}"
-    
-    REGRAS ESTRITAS DE RESPOSTA (PYTHON):
-    1. Responde APENAS com código Python em blocos ```python ... ```.
-    2. O dataframe chama-se 'df'. NÃO uses pd.read_csv.
+    ATUA COMO: {persona} (Analista Sénior).
+    CONTEXTO: {summary}
+    PEDIDO: "{query}"
+    REGRAS:
+    1. Responde APENAS com código Python (blocos ```python```).
+    2. O df já existe. NÃO uses pd.read_csv.
     3. Importa pandas, matplotlib.pyplot, seaborn.
-    4. Gráficos: Usa `plt.figure(figsize=(10,6))` e `sns.set_theme()`.
-    5. PROIBIDO: Não uses `datetime_is_numeric` (dá erro). Não faças `print(df)`.
-    6. TEXTO: Usa `print(f"## Título")` para escreveres o relatório no output.
+    4. Gráficos: plt.figure(figsize=(10,6)).
+    5. PROIBIDO: Não uses 'datetime_is_numeric'.
     """
     try:
         model = genai.GenerativeModel(chosen_model)
@@ -191,7 +214,7 @@ def ext_register_user(u, p, e):
     if u in db.full_db["users"]: return False, "User existe."
     db.full_db["users"][u] = {
         "password": ext_hash_pass(p), "email": e, "created_at": datetime.now().isoformat(), "plan": "free",
-        "notifications": [], "chats": {}, "tasks": {}, "docs": {}, "datasets": {}
+        "notifications": [], "chats": {}, "tasks": {}, "docs": {}, "datasets": {}   
     }
     with open(HISTORY_FILE, 'w') as f: json.dump(db.full_db, f, indent=4, default=str)
     return True, "Criado!"
