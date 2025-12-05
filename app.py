@@ -91,48 +91,46 @@ class HistoryManager:
             "created_at": datetime.now().isoformat()
         }
         self.save_db()
-    
+        
+    def delete_doc(self, did):
+        if did in self.user_data["docs"]: del self.user_data["docs"][did]; self.save_db()
+
+# --- GESTÃO DE TAREFAS (BACKEND) ---
     def create_task(self, t, desc="", prio="Média", assignee=""):
         tid = str(uuid.uuid4())
         self.user_data["tasks"][tid] = {
             "title": t, 
             "description": desc, 
             "priority": prio, 
-            "status": "To Do", 
-            "assignee": assignee,       # Novo: Quem vai fazer
-            "history": [],              # Novo: Histórico de conversa
+            "status": "To Do",
+            "assignee": assignee, 
+            "history": [], 
             "created_at": datetime.now().isoformat()
         }
         self.save_db()
-        self.save_db()
 
     def add_task_comment(self, tid, msg):
-        """Adiciona um comentário ao histórico da tarefa."""
         if tid in self.user_data["tasks"]:
-            # Garante que a lista existe (para tarefas antigas)
-            if "history" not in self.user_data["tasks"][tid]:
+            if "history" not in self.user_data["tasks"][tid]: 
                 self.user_data["tasks"][tid]["history"] = []
             
-            timestamp = datetime.now().strftime("%d/%m %H:%M")
             self.user_data["tasks"][tid]["history"].append({
-                "user": self.username,
-                "msg": msg,
-                "ts": timestamp
+                "user": self.username, 
+                "msg": msg, 
+                "ts": datetime.now().strftime("%d/%m %H:%M")
             })
             self.save_db()
     
     def move_task(self, tid, status):
-        if tid in self.user_data["tasks"]: 
+        if tid in self.user_data["tasks"]:
             self.user_data["tasks"][tid]["status"] = status
-            # Regista a mudança no histórico automaticamente
-            self.add_task_comment(tid, f"Mudou estado para: {status}")
+            self.add_task_comment(tid, f"Mudou para: {status}")
             self.save_db()
             
     def delete_task(self, tid):
-        if tid in self.user_data["tasks"]: del self.user_data["tasks"][tid]; self.save_db()
-        
-    def delete_doc(self, did):
-        if did in self.user_data["docs"]: del self.user_data["docs"][did]; self.save_db()
+        if tid in self.user_data["tasks"]: 
+            del self.user_data["tasks"][tid]
+            self.save_db()
 
 # --- 4. CÉREBRO IA (MODO PRECISÃO) ---
 def ask_gemini(df, query, key, persona):
